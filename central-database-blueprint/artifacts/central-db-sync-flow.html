@@ -144,24 +144,26 @@
   <div class="stage"><div class="card job"><div class="card-head"><span class="step-no">02</span><span class="badge job">Service registration</span><h3>DI wiring trong <code class="tag">CentralDbSyncInfrastructureExtensions</code></h3></div>
   <div class="split">
     <div>
-      <p><b>Source readers (MSSQL):</b></p>
+      <p><b>Source readers (MSSQL — generic):</b></p>
       <ul style="font-size:13px; color:#cdd7e8; margin:6px 0 0; padding-left:18px;">
-        <li><code>IBootstrapSnapshotReader</code> → <code>SqlServerPartnersReader</code></li>
-        <li><code>IFullRefreshReader</code> → <code>SqlServerPartnersReader</code></li>
-        <li><code>IChangeTrackingReader</code> → <code>SqlServerPartnersReader</code></li>
+        <li><code>IBootstrapSnapshotReader</code> → <code>SqlServerGenericReader</code></li>
+        <li><code>IChangeTrackingReader</code> → <code>SqlServerGenericReader</code></li>
       </ul>
     </div>
     <div>
-      <p><b>Target appliers (PostgreSQL):</b></p>
+      <p><b>Target + runtime config (PostgreSQL):</b></p>
       <ul style="font-size:13px; color:#cdd7e8; margin:6px 0 0; padding-left:18px;">
-        <li><code>ISyncBatchApplier</code> → <code>PostgresPartnersWriter</code></li>
+        <li><code>ISyncBatchApplier</code> → <code>PostgresGenericApplier</code> (multi-table)</li>
         <li><code>ISyncCheckpointStore</code> → <code>PostgresSyncCheckpointStore</code></li>
+        <li><code>ISyncConfigStore</code> → <code>PostgresSyncConfigStore</code> (runtime toggle)</li>
+        <li><code>ISqlServerCtHealthCheck</code> → <code>SqlServerCtHealthCheck</code> (CT diagnostic)</li>
         <li><code>ITableSyncLock</code> → <code>PostgresTableSyncLock</code></li>
         <li><code>ISyncRunLog</code> → <code>PostgresSyncRunLog</code></li>
+        <li><code>IBootstrapRequestStore</code> → <code>PostgresBootstrapRequestStore</code></li>
       </ul>
     </div>
   </div>
-  <p class="note">Tất cả infrastructure services đều đăng ký <code>AddScoped</code> — mỗi sync cycle tạo scope riêng.</p>
+  <p class="note">Tất cả infrastructure services đều đăng ký <code>AddScoped</code> — mỗi sync cycle tạo scope riêng. Generic reader/writer dùng mapping rule để hoạt động với mọi table.</p>
   </div></div>
 
   <div class="arrow"><div class="lbl">Hangfire RecurringJob chạy mỗi phút</div><div class="stem"></div><div class="tip"></div></div>
@@ -350,8 +352,8 @@ TableB: CHANGETABLE(..., 100) → 0 rows  → checkpoint 101, outcome = no_chang
 
   <div class="split">
     <div class="stage"><div class="card pg"><div class="card-head"><span class="step-no">08</span><span class="badge pg">sync_meta tables (PostgreSQL)</span><h3>3 tables quản lý sync engine</h3></div>
-      <p><b><code>sync_meta.table_sync_config</code></b><br>Registry: source_table, target, sync_mode (ChangeTracking/FullRefresh), tier (Hot/Cold), dependency, interval, lag, enabled.</p>
-      <div class="callout" style="margin-top:8px"><b>⚠️ Dead data — documentation only.</b> Hiện tại <b>không có C# code nào đọc</b> từ <code>table_sync_config</code>. Config được hardcode ở <code>CentralDbSyncJobs</code> và <code>CentralDbSyncController</code>. Xem <code>docs/notes/2026-07-19-config-read-gap.md</code>.</div>
+      <p><b><code>sync_meta.table_sync_config</code></b><br>Registry: source_table, target_schema, target_table, sync_mode, sync_tier, expected_sync_interval, max_allowed_lag, ownership_scope, enabled, dependency[].</p>
+      <div class="callout key" style="margin-top:8px"><b>✅ Active (2026-07-21).</b> <code>ISyncConfigStore</code> đọc/ghi <code>enabled</code> flag để runtime toggle recurring sync. Seed tự động khi bootstrap thành công qua <code>SeedAsync</code>. Toggle qua <code>PATCH /{table}/enabled</code>.</div>
       <p style="margin-top:12px"><b><code>sync_meta.checkpoint</code></b><br>Per-table: last_sync_version, sync_status (pending_initial_sync / ready / requires_full_resync), timestamps, error metadata.</p>
       <p style="margin-top:8px"><b><code>sync_meta.sync_run_log</code></b><br>Append-only audit: run_id, mode (Bootstrap/ChangeTracking/Orchestrator), outcome, row counts, checkpoint range, duration, error.</p>
     </div></div>
@@ -407,10 +409,10 @@ TableB: CHANGETABLE(..., 100) → 0 rows  → checkpoint 101, outcome = no_chang
   <div class="stage"><div class="card"><div class="card-head"><span class="step-no">D3</span><span class="badge good">CT Retention Recovery</span></div><p>Nếu sync downtime quá 2 ngày, checkpoint <code>last_sync_version</code> &lt; <code>CHANGE_TRACKING_MIN_VALID_VERSION</code> → CheckpointInvalidException → tự động full resync recovery với <code>ExecuteWithProvidedLockAsync</code> giữ nguyên lock handle. Đây là behavior mong muốn.</p></div></div>
 
   <footer class="page">
-    <b>Phase 1 Pilot — Central DB Sync</b><br>
-    Source: <code>[dbo].[CRM.Partners]</code> → <code>report.partners</code> · 348 rows · <code>ChangeTracking</code> incremental sync<br>
-    Services: <code>BootstrapSyncService</code> + <code>ChangeTrackingSyncService</code> + <code>SyncOrchestrator</code> · PostgreSQL 16 · Hangfire scheduling<br>
-    Manual test: 2026-07-19 · All tests passed.
+    <b>Phase 1 — Multi-table Central DB Sync</b><br>
+    Sources: <code>CRM.Partners</code>, <code>ERP.Configs.Units</code>, <code>ERP.Configs.Sizes</code> · Change Tracking incremental sync<br>
+    Services: <code>BootstrapSyncService</code> + <code>ChangeTrackingSyncService</code> + <code>SyncOrchestrator</code> + Runtime toggle (<code>ISyncConfigStore</code>) + CT health check<br>
+    Last updated: 2026-07-21 · All tests passed.
   </footer>
 </div>
 </body>

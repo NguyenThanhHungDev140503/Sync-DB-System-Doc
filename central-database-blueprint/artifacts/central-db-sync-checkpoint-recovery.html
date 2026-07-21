@@ -765,7 +765,7 @@ Read TableB: events (100, 101] = 0 row → no_changes → TableB checkpoint = 10
       <li><code>Application/CentralDbSync/Services/ChangeTrackingSyncService.cs</code> — CT flow: validate checkpoint, catch CheckpointInvalidException, gọi immediate recovery</li>
       <li><code>Application/CentralDbSync/Services/BootstrapSyncService.cs</code> — bootstrap flow + ExecuteWithProvidedLockAsync cho same-lock recovery</li>
       <li><code>Infrastructure/CentralDbSync/SqlServerPartnersReader.cs</code> — ReadBatchAsync: throw CheckpointInvalidException khi MIN_VALID_VERSION &gt; checkpoint</li>
-      <li><code>Infrastructure/CentralDbSync/CentralDbSyncHealthService.cs</code> — health check dựa trên checkpoint data</li>
+      <li><code>Infrastructure/CentralDbSync/CentralDbSyncStatusService.cs</code> — health check dựa trên checkpoint data (renamed from CentralDbSyncHealthService)</li>
       <li><code>Infrastructure/Database/SqlScript/CentralDbSync/002-central-db-sync-seed.sql</code> — seed: pending_initial_sync</li>
     </ul>
   </div>
@@ -773,7 +773,7 @@ Read TableB: events (100, 101] = 0 row → no_changes → TableB checkpoint = 10
   <footer class="page">
     <b>Central DB Sync — Phase 1 Pilot · Checkpoint &amp; Recovery Analysis</b><br>
     Covers: 4 checkpoint failure scenarios · server crash mid-sync · ERP change during downtime · state machine · same-lock recovery · health implications · race condition analysis<br>
-    <span style="font-size:12px">Last updated: 2026-07-20</span>
+    <span style="font-size:12px">Last updated: 2026-07-21</span>
   </footer>
 </div>
 </body>

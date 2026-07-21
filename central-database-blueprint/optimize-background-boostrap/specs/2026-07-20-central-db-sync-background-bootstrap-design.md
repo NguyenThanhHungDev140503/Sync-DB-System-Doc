@@ -1,8 +1,8 @@
 # Design: Central DB Sync Background Bootstrap at Scale
 
-**Date:** 2026-07-20  
-**Status:** Approved design, ready for implementation planning  
-**Scope:** `CRM.Partners` pilot only
+**Date:** 2026-07-21  
+**Status:** Approved & implemented — Phase 1 complete  
+**Scope:** `CRM.Partners` pilot initial target
 
 ## Goal
 
@@ -76,10 +76,10 @@ A partial unique index permits at most one active request per `source_table`, wh
 Hangfire storage and Central DB are separate stores, so no distributed transaction is assumed.
 
 1. Atomically create a `PendingEnqueue` request row, or return the existing active request.
-2. Enqueue `CentralDbSyncJobs.RunBootstrapAsync(sourceTable, requestId)` through `IBackgroundJobClient`.
-3. Save the returned Hangfire job identifier and transition the request to `Queued`.
-4. If enqueueing fails, mark the request `Failed` with a safe enqueue error.
-5. A reconciliation job detects old `PendingEnqueue` rows and either enqueues them once or marks them failed. This covers process failure between steps 1 and 3.
+2. Schedule a one-shot watchdog (45s delay). If process crashes between here and step 4, the watchdog fires and re-enqueues.
+3. Enqueue `CentralDbSyncJobs.RunBootstrapAsync(sourceTable, requestId)` through `IBackgroundJobClient`.
+4. Save the returned Hangfire job identifier and transition the request to `Queued`.
+5. If enqueueing fails, mark the request `Failed` with a safe enqueue error.
 
 The job type must be resolvable through the existing ASP.NET Core DI container. Only small serializable values (`sourceTable` and `requestId`) are job arguments; no connections, services, or source data are serialized into Hangfire.
 
@@ -101,8 +101,10 @@ The PostgreSQL advisory lock remains held for the full bootstrap operation. If a
 
 `DisableConcurrentExecution` may remain as a Hangfire-level optimization, but no correctness rule relies on it. The advisory lock, idempotent staging writes, and checkpoint compare-and-swap protect against duplicate processing after retries or process failures.
 
-### Retry and restart behavior
+### Orphan recovery, retry and restart behavior
 
+- Per-request one-shot watchdog (delay=45s) recovers requests stuck in `PendingEnqueue` after a crash between steps 1 and 3 of the enqueue protocol. Not a recurring poll.
+- The old 5-minute batch reconciliation (`ReconcilePendingBootstrapRequestsAsync`) is retained for manual ops recovery; not registered as a recurring job.
 - Retriable PostgreSQL network, timeout, deadlock, and connection-interruption errors use bounded delayed retry with the same request ID.
 - Mapping, validation, source-read, and constraint errors fail without blind retry and require operator remediation before a new request is submitted.
 - A process restart does not create a new request: Hangfire retains queued work, and the request row identifies its current lifecycle state.
@@ -146,12 +148,44 @@ The final publish is the only point where `report.partners` changes. It either c
 | Layer | New or changed responsibility |
 |---|---|
 | `Application` | Provider-neutral request/staging contracts, request coordinator, status model, and run-ID propagation |
-| `Infrastructure` | PostgreSQL request/staging stores, SQL Server batched snapshot reader, PostgreSQL staging publisher/cleanup, and Hangfire enqueue/reconciliation implementation |
+| `Infrastructure` | PostgreSQL request/staging stores, SQL Server batched snapshot reader, PostgreSQL staging publisher/cleanup, and Hangfire enqueue/watchdog scheduling/ops reconciliation implementation |
 | `WebApi` | Quick `202` request endpoint and status endpoint; no long-running bootstrap work in the request pipeline |
 | `CentralDbSyncJobs` | Background bootstrap entry point that resolves scoped services, claims the request, and invokes the shared bootstrap workflow |
 | SQL scripts | Idempotent creation of request/staging metadata, indexes, and runtime DML permissions |
 
 The existing source-to-target mapping, soft-deactivation semantics, advisory lock, checkpoint store, checkpoint lag status endpoint (`GET {sourceTable}/status`), and CT pipeline remain shared rather than being duplicated for manual bootstrap.
+
+## Additional features implemented in Phase 1
+
+### Runtime per-table toggle
+
+`ISyncConfigStore` / `PostgresSyncConfigStore` provides a `sync_meta.table_sync_config`-backed runtime toggle so individual tables can be enabled or disabled without code changes or redeploys.
+
+- `IsEnabledAsync` checks whether a table is currently enabled.
+- `SetEnabledAsync` toggles the enabled flag (returns `InvalidOperationException` if the table does not exist).
+- `GetAllAsync` returns all registered tables with their config and enabled state.
+- `SeedAsync` upserts a complete `TableSyncConfig` row.
+- `CentralDbSyncJobs.RunAsync` filters out disabled tables before recurring execution.
+- `CentralDbSyncJobs.RunBootstrapAsync` calls `SeedAsync` after a successful bootstrap to persist the table's sync config.
+
+Endpoints added:
+- `GET /api/central-db-sync/tables` — list all tables with enabled state
+- `PATCH /api/central-db-sync/{sourceTable}/enabled` — enable/disable a table at runtime
+
+### Change Tracking health check
+
+`ISqlServerCtHealthCheck` / `SqlServerCtHealthCheck` queries `sys.change_tracking_tables` on the ERP SQL Server to confirm Change Tracking is active for a given source table.
+
+Endpoint added:
+- `GET /api/central-db-sync/{sourceTable}/ct-status` — check CT enabled status on the source
+
+### Bootstrap auto-seed
+
+After bootstrap succeeds (status `Completed`), `RunBootstrapAsync` calls `ISyncConfigStore.SeedAsync` to upsert the table's sync config. If seeding fails, the request is marked `Failed` (not `Completed`).
+
+### Open-generic DI registration
+
+`PostgresGenericReader<>` and `PostgresGenericWriter<>` are registered via open-generic DI (no per-table manual registrations).
 
 ## Security and Operations
 
@@ -181,3 +215,7 @@ The existing source-to-target mapping, soft-deactivation semantics, advisory loc
 - Keep no manual cancellation endpoint in the first delivery.
 - Keep the Admin guard disabled during pilot/early phases and require it in Production.
 - Refer to `report.partners` as "published Central DB data", not a specific report screen.
+- Runtime toggle via `ISyncConfigStore` rather than appsettings or feature flags.
+- Bootstrap auto-seeds sync config on completion via `SeedAsync`.
+- Open-generic DI registration for readers/writers instead of per-table registrations.
+- `ISqlServerCtHealthCheck` for proactive CT-status visibility.

@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CORE-MOBILE-APP-Reporting — Bootstrap Data Flow</title>
+<style>
+  :root {
+    --bg: #0f1420;
+    --panel: #161d2d;
+    --panel-2: #1c2637;
+    --ink: #e8edf6;
+    --muted: #93a1b8;
+    --border: #2a3550;
+    --accent-1: #5cc8ff;
+    --accent-1-bg: #12222e;
+    --accent-2: #a98bff;
+    --accent-2-bg: #211b35;
+    --good: #52d99a;
+    --good-bg: #12251c;
+    --warn: #ffd166;
+    --warn-bg: #2c2616;
+    --danger: #ff6b6b;
+    --danger-bg: #2a1515;
+    --code-bg: #0b0f18;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--ink); font-family:system-ui,-apple-system,sans-serif; line-height:1.6; padding:40px 20px; }
+  .wrap { max-width:1000px; margin:0 auto; }
+  header.page { border-bottom:1px solid var(--border); padding-bottom:20px; margin-bottom:30px; }
+  header.page h1 { font-size:28px; font-weight:700; }
+  header.page .sub { color:var(--muted); font-size:14px; margin-top:6px; }
+
+  h2.section { font-size:20px; font-weight:600; margin:36px 0 16px; padding-bottom:8px; border-bottom:1px solid var(--border); color:var(--ink); }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:18px 20px; margin-bottom:16px; }
+  .card p.note { color:var(--muted); font-size:14px; }
+
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:14px; }
+  th, td { text-align:left; padding:8px 12px; border:1px solid var(--border); }
+  th { background:var(--panel-2); color:var(--muted); font-weight:600; }
+  td { background:var(--panel); }
+  .col-type { font-family:monospace; color:var(--accent-1); font-size:13px; }
+  .col-pk { color:var(--warn); font-weight:600; }
+
+  .callout { padding:12px 16px; border-radius:8px; margin:12px 0; font-size:14px; border-left:4px solid var(--warn); background:var(--warn-bg); }
+  .callout.key { border-left-color:var(--good); background:var(--good-bg); }
+  .callout.danger { border-left-color:var(--danger); background:var(--danger-bg); }
+  .callout.accent-1 { border-left-color:var(--accent-1); background:var(--accent-1-bg); }
+  .callout.accent-2 { border-left-color:var(--accent-2); background:var(--accent-2-bg); }
+
+  pre { background:var(--code-bg); border:1px solid var(--border); border-radius:8px; padding:14px 16px; font-size:13px; line-height:1.5; overflow-x:auto; margin:12px 0; font-family:'JetBrains Mono','Cascadia Code','Fira Code',monospace; }
+
+  .badge { display:inline-block; font-size:11px; font-weight:600; padding:2px 8px; border-radius:4px; text-transform:uppercase; letter-spacing:.3px; }
+  .badge.good { background:var(--good-bg); color:var(--good); }
+  .badge.warn { background:var(--warn-bg); color:var(--warn); }
+  .badge.danger { background:var(--danger-bg); color:var(--danger); }
+  .badge.accent-1 { background:var(--accent-1-bg); color:var(--accent-1); }
+  .badge.accent-2 { background:var(--accent-2-bg); color:var(--accent-2); }
+
+  .flow-box { background:var(--code-bg); border:1px solid var(--border); border-radius:8px; padding:14px 16px; font-size:13px; font-family:'JetBrains Mono','Cascadia Code','Fira Code',monospace; line-height:1.7; margin:12px 0; }
+  .k { color:#ff79c6; }
+  .f { color:#50fa7b; }
+  .c { color:#6272a4; font-style:italic; }
+  .s { color:#f1fa8c; }
+  .err { color:var(--danger); }
+  .dim { color:var(--muted); }
+  .step { color:var(--accent-1); }
+  .table-ref { color:var(--accent-2); }
+  .good { color:var(--good); }
+  .arrow { color:var(--muted); }
+  .note { color:var(--muted); font-style:italic; }
+  code.path { background:var(--panel-2); padding:1px 6px; border-radius:4px; font-size:13px; }
+
+  ul.files-list { list-style:none; padding:0; margin:12px 0; }
+  ul.files-list li { padding:6px 0; border-bottom:1px solid var(--border); font-size:14px; }
+  ul.files-list li:last-child { border-bottom:none; }
+  ul.files-list code { background:var(--panel-2); padding:1px 6px; border-radius:4px; font-size:13px; }
+
+  footer.page { border-top:1px solid var(--border); padding-top:20px; margin-top:40px; color:var(--muted); font-size:13px; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="page">
+    <h1>CORE-MOBILE-APP-Reporting — Bootstrap Data Flow</h1>
+    <div class="sub"><code class="path">Reader → Column Mapping → Applier</code> · Luồng đọc data từ SQL Server, ánh xạ schema, và ghi vào PostgreSQL</div>
+  </header>
+
+  <!-- ================================================================ -->
+  <h2 class="section">I. Tổng quan Pipeline</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <p>Toàn bộ bootstrap data flow là một pipeline 3 tầng:</p>
+    <div class="flow-box">
+      <span class="step">1. BootstrapSyncService.ExecuteAsync</span><br>
+      <div style="padding-left:16px;margin-top:4px">
+        ├─ Acquire advisory lock (pg_try_advisory_lock)<br>
+        │  └─ <span class="warn">[Lock busy]</span> → SkippedLocked<br>
+        ├─ <span class="good">reader.ReadAsync(config)</span><br>
+        │  ├─ Mở SQL Server ReadCommitted transaction<br>
+        │  ├─ <span class="dim">CHANGE_TRACKING_CURRENT_VERSION()</span> → baseline<br>
+        │  ├─ SELECT data với READPAST hint<br>
+        │  ├─ Verify version → nếu changed → rollback + retry (max 3)<br>
+        │  └─ return <span class="table-ref">BootstrapSnapshot(baseline, rows)</span><br>
+        ├─ <span class="good">applier.ApplyBootstrapAsync(config, snapshot)</span><br>
+        │  ├─ 1 PostgreSQL transaction<br>
+        │  ├─ <span class="dim">BuildTargetValues(rule, row)</span><br>
+        │  ├─ <span class="dim">Upsert all rows</span><br>
+        │  ├─ <span class="dim">Deactivate orphan rows</span><br>
+        │  └─ <span class="dim">Upsert checkpoint</span><br>
+        ├─ <span class="note">runLog.WriteAsync(...)</span><br>
+        └─ return SyncRunResult
+      </div>
+    </div>
+    <p class="note" style="margin-top:8px">📍 <code>Application/Features/CentralDbSync/Services/BootstrapSyncService.cs:73-136</code></p>
+  </div>
+
+  <div class="callout key">
+    <b>Atomicity guarantee:</b> Hoặc toàn bộ upsert + orphan deactivate + checkpoint được commit trong 1 transaction PostgreSQL, hoặc không gì thay đổi. Snapshot consistency được đảm bảo bởi version verify retry loop ở reader.
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">II. TableMappingRule — Khai báo schema mapping</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge good">Core abstraction</span>
+      <h3 style="margin:0">TableMappingRule</h3>
+    </div>
+    <p class="note" style="margin-top:6px">Mỗi rule khai báo: source table (SQL Server), target table (PostgreSQL), và field-by-field mapping</p>
+
+    <div class="flow-box">
+      <span class="step">TableMappingRule</span><br>
+      <div style="padding-left:16px;margin-top:4px">
+        ├─ <span class="table-ref">SourceSpec</span><br>
+        │  ├─ PrimaryTable = <span class="s">"CRM.Partners"</span><br>
+        │  ├─ PrimaryKey = [<span class="s">"PartnerId"</span>]<br>
+        │  ├─ ActivePredicate = [<span class="s">IsCustomer = true</span>]<br>
+        │  └─ Joins = [...]<br>
+        ├─ <span class="table-ref">TargetSpec</span><br>
+        │  ├─ Schema = <span class="s">"report"</span><br>
+        │  ├─ Table = <span class="s">"partners"</span><br>
+        │  └─ PrimaryKey = [<span class="s">"partner_id"</span>]<br>
+        ├─ <span class="table-ref">Columns[]</span> — mỗi ColumnMapping 1 field<br>
+        ├─ SyncTier, ExpectedSyncInterval, MaxAllowedLag<br>
+        └─ OwnershipScope, Enabled
+      </div>
+    </div>
+
+    <pre><span class="c">// Application/Features/CentralDbSync/Config/TableMappingRegistry.cs:29-71</span>
+<span class="k">new</span> TableMappingRule
+{
+    Name = <span class="s">"CRM.Partners"</span>,
+    Source = <span class="k">new</span> SourceSpec
+    {
+        PrimaryTable = <span class="s">"CRM.Partners"</span>,
+        PrimaryKey = [<span class="s">"PartnerId"</span>],
+        ActivePredicate = [<span class="k">new</span> ColumnPredicate
+        {
+            Column = <span class="s">"IsCustomer"</span>,
+            Operator = PredicateOperator.Eq,
+            Value = <span class="k">true</span>
+        }]
+    },
+    Target = <span class="k">new</span> TargetSpec
+    {
+        Schema = <span class="s">"report"</span>,
+        Table = <span class="s">"partners"</span>,
+        PrimaryKey = [<span class="s">"partner_id"</span>]
+    },
+    Columns =
+    [
+        MapPk(<span class="s">"partner_id"</span>, <span class="s">"integer"</span>, <span class="s">"t0.PartnerId"</span>),
+        Map(<span class="s">"company_id"</span>, <span class="s">"integer"</span>, <span class="s">"t0.CompanyId"</span>),
+        Map(<span class="s">"name"</span>, <span class="s">"text"</span>, <span class="s">"t0.Name"</span>),
+        <span class="c">// ... other fields ...</span>
+        <span class="k">new</span>() { TargetColumn = <span class="s">"is_active"</span>,
+                 TargetType = <span class="s">"boolean"</span>,
+                 IsActiveFlag = <span class="k">true</span> }  <span class="c">// computed, not from SQL</span>
+    ],
+    <span class="c">// ... config fields ...</span>
+};</pre>
+  </div>
+
+  <div class="card">
+    <h3>2.1 ColumnMapping — Field-level mapping</h3>
+    <table>
+      <tr><th>Property</th><th>VD: partner_id</th><th>VD: is_active</th><th>Mô tả</th></tr>
+      <tr>
+        <td><code>TargetColumn</code></td>
+        <td class="col-type"><code>partner_id</code></td>
+        <td class="col-type"><code>is_active</code></td>
+        <td>Tên column trên PostgreSQL</td>
+      </tr>
+      <tr>
+        <td><code>TargetType</code></td>
+        <td class="col-type"><code>integer</code></td>
+        <td class="col-type"><code>boolean</code></td>
+        <td>PostgreSQL data type</td>
+      </tr>
+      <tr>
+        <td><code>SourceColumn</code></td>
+        <td><code>t0.PartnerId</code></td>
+        <td><code>null</code></td>
+        <td>Source SQL expression (alias.column). null nếu computed</td>
+      </tr>
+      <tr>
+        <td><code>IsPrimaryKey</code></td>
+        <td><span class="badge good">true</span></td>
+        <td>false</td>
+        <td>Đánh dấu PK — dùng cho ON CONFLICT</td>
+      </tr>
+      <tr>
+        <td><code>IsActiveFlag</code></td>
+        <td>false</td>
+        <td><span class="badge good">true</span></td>
+        <td>Computed flag — giá trị được tính từ ActivePredicate</td>
+      </tr>
+      <tr>
+        <td><code>Transform</code></td>
+        <td>null</td>
+        <td>null</td>
+        <td>Transformer name nếu cần xử lý đặc biệt</td>
+      </tr>
+    </table>
+    <p class="note" style="margin-top:8px">📍 <code>Application/Features/CentralDbSync/Mapping/ColumnMapping.cs:1-13</code></p>
+  </div>
+
+  <div class="callout">
+    <b>Quan trọng:</b> ColumnMapping với <code>IsActiveFlag=true</code> hoặc <code>Transform != null</code> <b>không được include</b> trong SELECT query từ SQL Server. Giá trị được tính toán bên phía PostgreSQL applier.
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">III. Reader — Đọc data từ SQL Server</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge accent-1">SqlServerGenericReader</span>
+      <h3 style="margin:0">3.1 Build Bootstrap SELECT</h3>
+    </div>
+    <p class="note" style="margin-top:6px"><code>SqlServerSqlBuilder.BuildBootstrapSelect(rule)</code> — sinh SELECT từ ColumnMapping list</p>
+
+    <p style="margin-top:8px;font-size:14px;">Quy tắc build:</p>
+    <ul style="margin:4px 0 0 20px;font-size:14px;color:var(--muted);">
+      <li>Duyệt tất cả ColumnMapping trong rule</li>
+      <li>Bỏ qua mapping có <code>IsActiveFlag = true</code> hoặc <code>Transform != null</code></li>
+      <li>Column <code>SourceColumn</code> (VD: <code>t0.PartnerId</code>) → <code>[t0].[PartnerId] AS [partner_id]</code></li>
+      <li>Deduplicate bằng alias → mỗi column chỉ select 1 lần</li>
+      <li>TransformDependsOn columns cũng được include để transformer có data</li>
+    </ul>
+
+    <pre><span class="c">-- Generated SQL cho CRM.Partners bởi BuildBootstrapSelect</span>
+<span class="k">SELECT</span> [t0].[PartnerId] <span class="k">AS</span> [partner_id],
+       [t0].[CompanyId] <span class="k">AS</span> [company_id],
+       [t0].[Code] <span class="k">AS</span> [code],
+       [t0].[Name] <span class="k">AS</span> [name],
+       [t0].[IsCustomer] <span class="k">AS</span> [is_customer],
+       [t0].[IsSupplier] <span class="k">AS</span> [is_supplier],
+       [t0].[Email] <span class="k">AS</span> [email],
+       [t0].[Phone] <span class="k">AS</span> [phone],
+       [t0].[Activated] <span class="k">AS</span> [activated]
+<span class="k">FROM</span> [dbo].[CRM.Partners] <span class="k">AS</span> [t0] <span class="k">WITH</span> (READPAST)</pre>
+    <p class="note" style="margin-top:8px">📍 <code>Infrastructure/CentralDbSync/Sql/SqlServerSqlBuilder.cs:8-25</code></p>
+
+    <div class="callout key">
+      <b>Key insight:</b> SELECT dùng alias là <code>TargetColumn</code> (VD: <code>partner_id</code>), không phải source column name. Nhờ đó <code>GenericSourceRow</code> được keyed bằng tên column PostgreSQL ngay từ đầu.
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>3.2 Consistent Snapshot — Version Verify Retry</h3>
+    <p>Đảm bảo snapshot data và baseline checkpoint version khớp nhau:</p>
+    <div class="flow-box">
+      <span class="step">ReadAsync</span><br>
+      <div style="padding-left:16px;margin-top:4px">
+        ├─ <span class="good">1. BEGIN TRAN (ReadCommitted)</span><br>
+        ├─ <span class="good">2. baseline = CHANGE_TRACKING_CURRENT_VERSION()</span><br>
+        ├─ <span class="good">3. SELECT data</span><br>
+        ├─ <span class="good">4. versionAfter = CHANGE_TRACKING_CURRENT_VERSION()</span><br>
+        ├─ <span class="f">if</span> (baseline == versionAfter)<br>
+        │  └─ <span class="good">COMMIT → return snapshot</span><br>
+        └─ <span class="warn">else → ROLLBACK → retry (max 3 lần)</span>
+      </div>
+    </div>
+
+    <pre><span class="c">// Infrastructure/CentralDbSync/SqlServerGenericReader.cs:30-68</span>
+<span class="k">for</span> (var attempt = 1; attempt <= MaxBootstrapRetries; attempt++)
+{
+    <span class="k">await using</span> var tx = <span class="k">await</span> conn.<span class="f">BeginTransactionAsync</span>(
+        IsolationLevel.ReadCommitted, ct);
+
+    var baseline = <span class="k">await</span> conn.<span class="f">ExecuteScalarAsync</span>&lt;<span class="k">long</span>&gt;(
+        <span class="s">"SELECT CHANGE_TRACKING_CURRENT_VERSION()"</span>, transaction: tx);
+
+    var rows = <span class="k">await</span> <span class="f">ReadRowsAsync</span>(conn, tx, select, ct);
+
+    var versionAfter = <span class="k">await</span> conn.<span class="f">ExecuteScalarAsync</span>&lt;<span class="k">long</span>&gt;(
+        <span class="s">"SELECT CHANGE_TRACKING_CURRENT_VERSION()"</span>, transaction: tx);
+
+    <span class="k">if</span> (baseline == versionAfter)
+    {
+        <span class="k">await</span> tx.<span class="f">CommitAsync</span>(ct);
+        <span class="k">return new</span> BootstrapSnapshot(baseline, rows);
+    }
+    <span class="k">await</span> tx.<span class="f">RollbackAsync</span>(ct);
+}
+<span class="k">throw new</span> InvalidOperationException(
+    <span class="s">"Failed to capture consistent snapshot after 3 attempts."</span>);</pre>
+  </div>
+
+  <div class="card">
+    <h3>3.3 ReadRows → GenericSourceRow</h3>
+    <p>SqlDataReader được đọc từng row, chuyển thành <code>GenericSourceRow</code> — dictionary keyed bằng column alias (chính là TargetColumn name):</p>
+
+    <pre><span class="c">// Infrastructure/CentralDbSync/SqlServerGenericReader.cs:170-179</span>
+<span class="k">private static</span> GenericSourceRow <span class="f">ReadSourceRow</span>(
+    SqlDataReader reader, IReadOnlyList&lt;<span class="k">string</span>&gt; aliases)
+{
+    var values = <span class="k">new</span> Dictionary&lt;<span class="k">string</span>, <span class="k">object?</span>&gt;(
+        StringComparer.OrdinalIgnoreCase);
+    <span class="k">foreach</span> (var alias <span class="k">in</span> aliases)
+    {
+        values[alias] = <span class="f">NormalizeDbValue</span>(reader[alias]); <span class="c">// DBNull → null</span>
+    }
+    <span class="k">return new</span> GenericSourceRow(values);
+}</pre>
+
+    <div class="callout key">
+      VD Row trong snapshot:<br>
+      <code>{ partner_id: 1, company_id: 100, code: "ABC", name: "Cty TNHH ...", is_customer: true, is_supplier: false, ... }</code>
+    </div>
+    <p class="note" style="margin-top:8px">📍 <code>Infrastructure/CentralDbSync/SqlServerGenericReader.cs:126-179</code></p>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">IV. Applier — Ghi vào PostgreSQL</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge accent-2">PostgresGenericApplier</span>
+      <h3 style="margin:0">4.1 BuildTargetValues — Ánh xạ field</h3>
+    </div>
+    <p class="note" style="margin-top:6px">Mỗi row trong snapshot được ánh xạ từ source row (keyed bằng alias SQL) sang target values (keyed bằng PostgreSQL column name)</p>
+
+    <div class="flow-box">
+      <span class="step">BuildTargetValues(rule, sourceRow)</span><br>
+      <div style="padding-left:16px;margin-top:4px">
+        ├─ <span class="f">foreach</span> column <span class="k">in</span> rule.Columns<br>
+        │  ├─ <span class="good">IsActiveFlag?</span> → evaluate ActivePredicate<br>
+        │  ├─ <span class="good">Transform?</span> → resolve & apply transformer<br>
+        │  ├─ <span class="good">SourceColumn?</span> → sourceRow.GetValueOrDefault(column.SourceColumn)<br>
+        │  └─ <span class="dim">else</span> → sourceRow.GetValueOrDefault(column.TargetColumn)<br>
+        └─ return dict{partner_id: 1, company_id: 100, ..., is_active: true}
+      </div>
+    </div>
+
+    <pre><span class="c">// Infrastructure/CentralDbSync/PostgresGenericApplier.cs:205-227</span>
+<span class="k">private</span> Dictionary&lt;<span class="k">string</span>, <span class="k">object?</span>&gt; <span class="f">BuildTargetValues</span>(
+    TableMappingRule rule, GenericSourceRow sourceRow)
+{
+    var values = <span class="k">new</span> Dictionary&lt;<span class="k">string</span>, <span class="k">object?</span>&gt;(
+        StringComparer.OrdinalIgnoreCase);
+    <span class="k">foreach</span> (var column <span class="k">in</span> rule.Columns)
+    {
+        <span class="f">PostgresTypeMap.EnsureSupported</span>(column.TargetType);
+        values[column.TargetColumn] = <span class="f">ResolveColumnValue</span>(rule, column, sourceRow);
+    }
+    <span class="k">return</span> values;
+}
+
+<span class="k">private</span> <span class="k">object?</span> <span class="f">ResolveColumnValue</span>(TableMappingRule rule,
+    ColumnMapping column, GenericSourceRow sourceRow)
+{
+    <span class="k">if</span> (column.IsActiveFlag)
+        <span class="k">return</span> <span class="f">IsActive</span>(rule, sourceRow);  <span class="c">// evaluate ActivePredicate</span>
+    <span class="k">if</span> (!string.IsNullOrWhiteSpace(column.Transform))
+        <span class="k">return</span> transformerRegistry.<span class="f">Resolve</span>(column.Transform)
+            .<span class="f">Transform</span>(sourceRow.Values);
+    <span class="k">if</span> (!string.IsNullOrWhiteSpace(column.SourceColumn))
+        <span class="k">return</span> sourceRow.<span class="f">GetValueOrDefault</span>(column.SourceColumn);
+    <span class="k">return</span> sourceRow.<span class="f">GetValueOrDefault</span>(column.TargetColumn);
+}</pre>
+  </div>
+
+  <div class="card">
+    <h3>4.2 ActivePredicate — Tính is_active</h3>
+    <p><code>IsActive</code> kiểm tra tất cả predicates — nếu tất cả đều true → row được coi là active. VD với CRM.Partners: <code>IsCustomer == true</code></p>
+
+    <pre><span class="c">// Infrastructure/CentralDbSync/PostgresGenericApplier.cs:229-254</span>
+<span class="k">private static bool</span> <span class="f">IsActive</span>(TableMappingRule rule, GenericSourceRow sourceRow)
+{
+    <span class="k">if</span> (rule.Source.ActivePredicate.Count == 0)
+        <span class="k">return true</span>;
+
+    <span class="k">return</span> rule.Source.ActivePredicate.<span class="f">All</span>(predicate
+        => <span class="f">Evaluate</span>(predicate, sourceRow));
+}
+
+<span class="k">private static bool</span> <span class="f">Evaluate</span>(ColumnPredicate predicate, GenericSourceRow sourceRow)
+{
+    var actual = sourceRow.<span class="f">GetValueOrDefault</span>(predicate.Column);
+    <span class="k">return</span> predicate.Operator <span class="k">switch</span>
+    {
+        PredicateOperator.Eq => <span class="f">Equals</span>(actual, predicate.Value),
+        PredicateOperator.Neq => !<span class="f">Equals</span>(actual, predicate.Value),
+        PredicateOperator.IsNull => actual <span class="k">is null</span>,
+        <span class="c">// ... Gt, Gte, Lt, Lte, In, NotIn, IsNotNull</span>
+    };
+}</pre>
+    <p class="note" style="margin-top:8px">📍 <code>Infrastructure/CentralDbSync/PostgresGenericApplier.cs:229-254</code></p>
+  </div>
+
+  <div class="card">
+    <h3>4.3 Upsert SQL</h3>
+    <p><code>UpsertSqlBuilder.BuildUpsert(rule)</code> sinh INSERT ON CONFLICT DO UPDATE tự động từ ColumnMapping:</p>
+
+    <pre><span class="c">// Infrastructure/CentralDbSync/Sql/UpsertSqlBuilder.cs:7-20</span>
+<span class="k">public string</span> <span class="f">BuildUpsert</span>(TableMappingRule rule)
+{
+    var insertColumns = rule.Columns
+        .Select(c => <span class="f">QuotePgIdentifier</span>(c.TargetColumn));
+    var valueColumns = rule.Columns
+        .Select(c => <span class="s">"@"</span> + c.TargetColumn);
+    var conflictColumns = rule.Target.PrimaryKey
+        .Select(<span class="f">QuotePgIdentifier</span>);
+    var updateColumns = rule.Columns
+        .Where(c => !c.IsPrimaryKey)
+        .Select(c => <span class="s">$"</span>{<span class="f">QuotePgIdentifier</span>(c.TargetColumn)}<span class="s"> = EXCLUDED.</span>{<span class="f">QuotePgIdentifier</span>(c.TargetColumn)}<span class="s">"</span>)
+        .Append(<span class="s">$"</span>{<span class="f">QuotePgIdentifier</span>(<span class="s">"synced_at"</span>)}<span class="s"> = NOW()"</span>);
+
+    <span class="k">return</span> <span class="s">$@"INSERT INTO </span>{<span class="f">QuotePgTable</span>(rule.Target.Schema, rule.Target.Table)}<span class="s">
+({string.Join(", ", insertColumns)})
+VALUES ({string.Join(", ", valueColumns)})
+ON CONFLICT ({string.Join(", ", conflictColumns)})
+DO UPDATE SET {string.Join(", ", updateColumns)}"</span>;
+}</pre>
+
+    <p style="margin-top:8px">Kết quả cho <code>CRM.Partners</code>:</p>
+    <pre><span class="k">INSERT INTO</span> <span class="s">"report"</span>.<span class="s">"partners"</span>
+    (<span class="s">"partner_id"</span>, <span class="s">"company_id"</span>, <span class="s">"code"</span>, <span class="s">"name"</span>, <span class="s">"is_customer"</span>, ...)
+<span class="k">VALUES</span> (@partner_id, @company_id, @code, @name, @is_customer, ...)
+<span class="k">ON CONFLICT</span> (<span class="s">"partner_id"</span>)
+<span class="k">DO UPDATE SET</span> <span class="s">"company_id"</span> = EXCLUDED.<span class="s">"company_id"</span>,
+               <span class="s">"code"</span> = EXCLUDED.<span class="s">"code"</span>,
+               ...,
+               <span class="s">"synced_at"</span> = NOW()</pre>
+
+    <p class="note" style="margin-top:8px">📍 <code>Infrastructure/CentralDbSync/Sql/UpsertSqlBuilder.cs:7-20</code></p>
+  </div>
+
+  <div class="card">
+    <h3>4.4 ApplyBootstrapAsync — Toàn bộ logic</h3>
+
+    <div class="flow-box">
+      <span class="step">ApplyBootstrapAsync(config, snapshot)</span><br>
+      <div style="padding-left:16px;margin-top:4px">
+        ├─ <span class="good">BEGIN TRAN</span><br>
+        ├─ <span class="step">1. Upsert all rows</span><br>
+        │  ├─ <span class="f">foreach</span> row <span class="k">in</span> snapshot.Rows<br>
+        │  │  ├─ values = <span class="f">BuildTargetValues</span>(rule, row)<br>
+        │  │  │  └─ <span class="dim">source: {partner_id=1, company_id=100, ...}</span><br>
+        │  │  │  └─ <span class="dim">→ target: {partner_id=1, is_active=true, ...}</span><br>
+        │  │  ├─ <span class="f">conn.ExecuteAsync</span>(upsertSql, ToDynamicParameters(values))<br>
+        │  │  └─ snapshotPks.Add(values[targetPrimaryKey])<br>
+        │  └─ <span class="dim">→ upsertedCount</span><br>
+        ├─ <span class="step">2. Deactivate orphans</span><br>
+        │  ├─ <span class="f">BuildLifecycleOrphans</span>(rule, <span class="s">"sourceSystem"</span>)<br>
+        │  ├─ <span class="c">-- UPDATE report.partners SET is_active = false</span><br>
+        │  ├─ <span class="c">-- WHERE source_system = 'erp' AND partner_id <> ALL(@snapshotPks)</span><br>
+        │  └─ <span class="dim">→ orphanLifecycleCount</span><br>
+        ├─ <span class="step">3. Upsert checkpoint</span><br>
+        │  ├─ <span class="c">-- INSERT INTO sync_meta.checkpoint (...) VALUES (...)</span><br>
+        │  └─ <span class="c">-- ON CONFLICT DO UPDATE SET ...</span><br>
+        ├─ <span class="good">COMMIT</span><br>
+        └─ <span class="k">return</span> SyncRunResult { Outcome = Succeeded, ... }
+      </div>
+    </div>
+
+    <pre><span class="c">// Infrastructure/CentralDbSync/PostgresGenericApplier.cs:124-203</span>
+<span class="k">async</span> Task&lt;SyncRunResult&gt; <span class="f">ApplyBootstrapAsync</span>(
+    TableSyncConfig config, BootstrapSnapshot snapshot, CancellationToken ct)
+{
+    var rule = ruleProvider.<span class="f">Get</span>(config.SourceTable);
+    <span class="k">await using</span> var conn = <span class="k">new</span> NpgsqlConnection(connectionString);
+    <span class="k">await</span> conn.<span class="f">OpenAsync</span>(ct);
+    <span class="k">await using</span> var tx = <span class="k">await</span> conn.<span class="f">BeginTransactionAsync</span>(ct);
+
+    <span class="k">try</span>
+    {
+        var upsertSql = sqlBuilder.<span class="f">BuildUpsert</span>(rule);
+        var targetPrimaryKey = <span class="f">GetSingleTargetPrimaryKeyColumn</span>(rule);
+        var snapshotPrimaryKeys = <span class="k">new</span> List&lt;<span class="k">object?</span>&gt;(snapshot.Rows.Count);
+        var upsertedCount = 0;
+
+        <span class="c">// Step 1: Upsert all rows</span>
+        <span class="k">foreach</span> (var row <span class="k">in</span> snapshot.Rows)
+        {
+            var values = <span class="f">BuildTargetValues</span>(rule, row);
+            snapshotPrimaryKeys.Add(values[targetPrimaryKey.TargetColumn]);
+            <span class="k">await</span> conn.<span class="f">ExecuteAsync</span>(upsertSql,
+                <span class="f">ToDynamicParameters</span>(values), transaction: tx);
+            upsertedCount++;
+        }
+
+        <span class="c">// Step 2: Deactivate orphans</span>
+        var snapshotPks = <span class="f">BuildTypedPrimaryKeyArray</span>(
+            targetPrimaryKey, snapshotPrimaryKeys);
+        var hasActiveFlag = sqlBuilder.<span class="f">HasActiveFlag</span>(rule);
+        <span class="k">await</span> conn.<span class="f">ExecuteAsync</span>(
+            sqlBuilder.<span class="f">BuildLifecycleOrphans</span>(rule, <span class="s">"sourceSystem"</span>),
+            <span class="k">new</span> { sourceSystem = rule.OwnershipScope, snapshotPks },
+            transaction: tx);
+
+        <span class="c">// Step 3: Upsert checkpoint</span>
+        <span class="k">await</span> conn.<span class="f">ExecuteAsync</span>(<span class="s">$@"INSERT INTO </span>{CheckpointTable}<span class="s">
+            (source_table, last_sync_version, sync_status, ...)
+            VALUES (...) ON CONFLICT (source_table) DO UPDATE SET ..."</span>,
+            <span class="k">new</span> { baselineVersion = snapshot.BaselineVersion, ... },
+            transaction: tx);
+
+        <span class="k">await</span> tx.<span class="f">CommitAsync</span>(ct);
+        <span class="k">return new</span> SyncRunResult { Outcome = Succeeded, ... };
+    }
+    <span class="k">catch</span> { <span class="k">await</span> tx.<span class="f">RollbackAsync</span>(ct); <span class="k">throw</span>; }
+}</pre>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">V. Type Mapping</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <h3>5.1 PostgresTypeMap — Target Type Validation</h3>
+    <p>Mỗi ColumnMapping.TargetType được kiểm tra trước khi build target values:</p>
+    <pre><span class="c">// PostgresGenericApplier.BuildTargetValues line 210</span>
+<span class="c">// Kiểm tra TargetType có hợp lệ không</span>
+<span class="f">PostgresTypeMap.EnsureSupported</span>(column.TargetType);</pre>
+  </div>
+
+  <div class="card">
+    <h3>5.2 Typed PK Array cho Orphan Query</h3>
+    <p><code>BuildTypedPrimaryKeyArray</code> chuyển list PK values sang typed array cho PostgreSQL <code>ALL(@snapshotPks)</code>:</p>
+    <table>
+      <tr><th>TargetType</th><th>C# conversion</th><th>PG array</th></tr>
+      <tr><td><code>text</code></td><td><code>value?.ToString()</code></td><td><code>text[]</code></td></tr>
+      <tr><td><code>integer</code></td><td><code>Convert.ToInt32</code></td><td><code>integer[]</code></td></tr>
+      <tr><td><code>bigint</code></td><td><code>Convert.ToInt64</code></td><td><code>bigint[]</code></td></tr>
+      <tr><td><code>boolean</code></td><td><code>Convert.ToBoolean</code></td><td><code>boolean[]</code></td></tr>
+      <tr><td><code>numeric</code></td><td><code>Convert.ToDecimal</code></td><td><code>numeric[]</code></td></tr>
+      <tr><td><code>date</code></td><td><code>DateOnly.FromDateTime</code></td><td><code>date[]</code></td></tr>
+      <tr><td><code>timestamptz</code></td><td><code>DateTimeOffset</code></td><td><code>timestamptz[]</code></td></tr>
+    </table>
+    <p class="note" style="margin-top:8px">📍 <code>Infrastructure/CentralDbSync/PostgresGenericApplier.cs:319-371</code></p>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">VI. Tổng quan Pipeline dạng Data Flow</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <div class="flow-box">
+      <span style="font-size:15px;font-weight:600">Bootstrap Data Pipeline — Full Flow</span><br><br>
+
+      <span class="step">[SQL Server ERP]</span><br>
+      <span class="arrow">│</span><br>
+      <span class="arrow">├─►</span> <b>SqlServerGenericReader</b> (ReadCommitted + READPAST)<br>
+      <span class="arrow">│</span>   ├─ capture <span class="table-ref">CHANGE_TRACKING_CURRENT_VERSION()</span><br>
+      <span class="arrow">│</span>   ├─ SELECT theo <span class="step">SqlServerSqlBuilder</span> (build từ ColumnMapping)<br>
+      <span class="arrow">│</span>   └─ version verify → fail → retry (max 3)<br>
+      <span class="arrow">│</span><br>
+      <span class="arrow">├─►</span> <b>BootstrapSnapshot</b><br>
+      <span class="arrow">│</span>   ├─ BaselineVersion = CT version<br>
+      <span class="arrow">│</span>   └─ Rows = GenericSourceRow[] (Dictionary&lt;alias, object?&gt;)<br>
+      <span class="arrow">│</span><br>
+      <span class="arrow">├─►</span> <b>PostgresGenericApplier</b> (1 PG transaction)<br>
+      <span class="arrow">│</span>   ├─ <span class="good">BuildTargetValues</span> — map field từng row<br>
+      <span class="arrow">│</span>   │   ├─ SourceColumn → copy value<br>
+      <span class="arrow">│</span>   │   ├─ IsActiveFlag → evaluate ActivePredicate<br>
+      <span class="arrow">│</span>   │   └─ Transform → IValueTransformer<br>
+      <span class="arrow">│</span>   ├─ <span class="good">Upsert</span> — INSERT ON CONFLICT DO UPDATE<br>
+      <span class="arrow">│</span>   ├─ <span class="good">Deactivate orphans</span> — WHERE PK NOT IN snapshot<br>
+      <span class="arrow">│</span>   └─ <span class="good">Checkpoint</span> — INSERT ON CONFLICT DO UPDATE<br>
+      <span class="arrow">│</span><br>
+      <span class="arrow">└─►</span> <span class="table-ref">report.partners</span> / <span class="table-ref">units</span> / <span class="table-ref">sizes</span><br>
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">VII. Source Map</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <ul class="files-list">
+      <li><code>Application/Features/CentralDbSync/Services/BootstrapSyncService.cs</code> — Orchestrator: lock → read → apply → log (73-136)</li>
+      <li><code>Application/Features/CentralDbSync/Abstractions/IBootstrapSnapshotReader.cs</code> — Contract: ReadAsync → BootstrapSnapshot (5-10)</li>
+      <li><code>Application/Features/CentralDbSync/Abstractions/ISyncBatchApplier.cs</code> — Contract: ApplyBootstrapAsync (12-16)</li>
+      <li><code>Application/Features/CentralDbSync/Config/TableMappingRegistry.cs</code> — Hardcoded rules cho 3 tables (27-132)</li>
+      <li><code>Application/Features/CentralDbSync/Mapping/TableMappingRule.cs</code> — Rule model: Source + Target + Columns (5-31)</li>
+      <li><code>Application/Features/CentralDbSync/Mapping/ColumnMapping.cs</code> — Field mapping: TargetColumn, TargetType, SourceColumn, IsActiveFlag (3-13)</li>
+      <li><code>Application/Features/CentralDbSync/Mapping/SourceSpec.cs</code> — Source: PrimaryTable, PrimaryKey, ActivePredicate, Joins (3-11)</li>
+      <li><code>Application/Features/CentralDbSync/Mapping/TargetSpec.cs</code> — Target: Schema, Table, PrimaryKey (3-8)</li>
+      <li><code>Application/Features/CentralDbSync/Models/BootstrapSnapshot.cs</code> — Snapshot DTO: BaselineVersion + Rows (3-5)</li>
+      <li><code>Application/Features/CentralDbSync/Models/GenericSourceRow.cs</code> — Dictionary-backed row with GetValueOrDefault (3-16)</li>
+      <li><code>Infrastructure/CentralDbSync/SqlServerGenericReader.cs</code> — Reader implementation: snapshot + CT reads (13-197)</li>
+      <li><code>Infrastructure/CentralDbSync/Sql/SqlServerSqlBuilder.cs</code> — Build SELECT from TableMappingRule (8-63)</li>
+      <li><code>Infrastructure/CentralDbSync/PostgresGenericApplier.cs</code> — Applier: BuildTargetValues, upsert, orphan, checkpoint (11-377)</li>
+      <li><code>Infrastructure/CentralDbSync/Sql/UpsertSqlBuilder.cs</code> — Build INSERT ON CONFLICT, lifecycle, orphan SQL (5-76)</li>
+    </ul>
+  </div>
+
+  <footer class="page">
+    <b>CORE-MOBILE-APP-Reporting — Central DB Sync · Bootstrap Data Flow</b><br>
+    Reader: <code>SqlServerGenericReader</code> · Mapping: <code>TableMappingRule</code> · Applier: <code>PostgresGenericApplier</code><br>
+    <span style="font-size:12px">Last updated: 2026-07-21</span>
+  </footer>
+</div>
+</body>
+</html>

@@ -259,6 +259,94 @@ HTTP 400
   Allowed: CRM.Partners", "allowedTables": ["CRM.Partners"] }</pre>
   </div>
 
+  <!-- 3. GET tables (list + enabled status) -->
+  <div class="ep-card http">
+    <div class="ep-head">
+      <span class="method get">GET</span>
+      <span class="route">/api/central-db-sync/tables</span>
+      <span class="badge http">HTTP endpoint</span>
+    </div>
+    <h3>Danh sách tất cả table đã đăng ký + trạng thái enabled</h3>
+    <div class="split">
+      <div>
+        <p><b>Mục đích:</b> Liệt kê tất cả table đã đăng ký trong <code>TableMappingRegistry</code> kèm trạng thái <code>enabled</code> từ <code>sync_meta.table_sync_config</code>. Table chưa seed mặc định <code>enabled: true</code>.</p>
+        <div class="callout pg"><b>Dependencies:</b> <code>IMappingRuleProvider</code> (registry) + <code>ISyncConfigStore</code> (đọc enabled flag).</div>
+      </div>
+      <div>
+        <p><b>Response example:</b></p>
+        <pre>HTTP 200
+[
+  { "sourceTable": "CRM.Partners", "targetTable": "partners",
+    "syncMode": "ChangeTracking", "enabled": true },
+  { "sourceTable": "ERP.Configs.Sizes", "targetTable": "sizes",
+    "syncMode": "ChangeTracking", "enabled": false }
+]</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. PATCH enable/disable -->
+  <div class="ep-card http">
+    <div class="ep-head">
+      <span class="method post">PATCH</span>
+      <span class="route">/api/central-db-sync/{sourceTable}/enabled</span>
+      <span class="badge http">HTTP endpoint</span>
+    </div>
+    <h3>Runtime toggle — bật/tắt recurring sync cho một table</h3>
+    <div class="split">
+      <div>
+        <p><b>Mục đích:</b> Cho phép admin tắt recurring sync của một table mà không cần restart app. Toggle được persist trong <code>sync_meta.table_sync_config.enabled</code> — sống sót qua restart.</p>
+        <p style="margin-top:8px"><b>Request body:</b></p>
+        <pre>{ "enabled": true }   <span class="c">-- bật sync</span>
+{ "enabled": false }  <span class="c">-- tắt sync</span></pre>
+        <div class="callout danger" style="margin-top:8px"><b>Yêu cầu:</b> Table phải đã được seed qua bootstrap. Nếu row chưa tồn tại → 500 với message "run bootstrap first".</div>
+      </div>
+      <div>
+        <p><b>Cách hoạt động:</b></p>
+        <pre><span class="f">PostgresSyncConfigStore.SetEnabledAsync</span>()
+  → UPDATE sync_meta.table_sync_config
+    SET enabled = @enabled
+    WHERE source_table = @sourceTable
+
+  <span class="k">if</span> (affected == 0)
+    → throw "run bootstrap first"</pre>
+        <p class="note" style="margin-top:6px">Cron job <code>RunAsync</code> đọc enabled flag mỗi lần chạy qua <code>IsEnabledAsync</code>. Table bị disable sẽ bị skip với debug log.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. GET ct-status -->
+  <div class="ep-card http">
+    <div class="ep-head">
+      <span class="method get">GET</span>
+      <span class="route">/api/central-db-sync/{sourceTable}/ct-status</span>
+      <span class="badge http">HTTP endpoint</span>
+    </div>
+    <h3>Kiểm tra Change Tracking trên SQL Server — query sys.change_tracking_tables</h3>
+    <div class="split">
+      <div>
+        <p><b>Mục đích:</b> Diagnostic endpoint — kiểm tra xem Change Tracking đã được bật trên SQL Server cho table này chưa. Độc lập với application config.</p>
+        <div class="callout sql"><b>Dependencies:</b> <code>ISqlServerCtHealthCheck</code> → <code>SqlServerCtHealthCheck</code> (query <code>sys.change_tracking_tables</code> qua ERP connection).</div>
+      </div>
+      <div>
+        <p><b>Response examples:</b></p>
+        <pre><span class="c">-- CT enabled</span>
+HTTP 200
+{ "sourceTable": "ERP.Configs.Sizes",
+  "schemaQualifiedName": "[dbo].[ERP.Configs.Sizes]",
+  "isCtEnabled": true,
+  "currentVersion": 12345,
+  "minValidVersion": 100 }
+
+<span class="c">-- CT disabled</span>
+HTTP 200
+{ "sourceTable": "ERP.Configs.Sizes",
+  "isCtEnabled": false,
+  "errorMessage": "...NOT enabled..." }</pre>
+      </div>
+    </div>
+  </div>
+
   <!-- ================================================================ -->
   <h2 class="section">II. Internal Services</h2>
   <!-- ================================================================ -->
@@ -267,39 +355,39 @@ HTTP 400
   <div class="ep-card internal">
     <div class="ep-head">
       <span class="method hangfire">⏱</span>
-      <span class="route">CentralDbSyncJobs.RunPilotAsync()</span>
+      <span class="route">CentralDbSyncJobs.RunAsync()</span>
       <span class="badge internal">Hangfire RecurringJob</span>
     </div>
-    <h3>Job định kỳ — mỗi 1 phút</h3>
+    <h3>Job định kỳ — đa table, có runtime toggle filter</h3>
 
     <div class="split">
       <div>
-        <p><b>Mục đích:</b> Là entry point cho sync engine chạy tự động, thay thế cho việc gọi API thủ công.</p>
+        <p><b>Mục đích:</b> Entry point cho sync engine chạy tự động cho TẤT CẢ table đã đăng ký.</p>
         <p style="margin-top:8px"><b>Cách hoạt động:</b></p>
         <table>
           <tr><th>Bước</th><th>Mô tả</th></tr>
           <tr><td>1</td><td>Hangfire trigger — queue <code>data-sync</code></td></tr>
           <tr><td>2</td><td>Tạo DI scope mới</td></tr>
-          <tr><td>3</td><td>Lấy <code>SyncOrchestrator</code> từ scope</td></tr>
-          <tr><td>4</td><td>Tạo <code>TableSyncConfig</code> cho CRM.Partners</td></tr>
-          <tr><td>5</td><td>Gọi <code>orchestrator.ExecuteAsync([config])</code></td></tr>
+          <tr><td>3</td><td>Lấy danh sách table từ <code>IMappingRuleProvider.GetAll()</code></td></tr>
+          <tr><td>4</td><td>Filter qua <code>ISyncConfigStore.IsEnabledAsync()</code> — bỏ table bị disable</td></tr>
+          <tr><td>5</td><td>Gọi <code>orchestrator.ExecuteAsync(enabledConfigs)</code></td></tr>
         </table>
         <p style="margin-top:8px"><b>Đặc điểm:</b></p>
         <ul style="font-size:13px; color:#cdd7e8; margin:6px 0 0; padding-left:18px;">
-          <li><code>[DisableConcurrentExecution(60s)]</code> — không có 2 instance chạy cùng lúc</li>
+          <li><code>[DisableConcurrentExecution(60s)]</code> — không 2 instance chạy cùng lúc</li>
           <li><code>[AutomaticRetry(Attempts = 0)]</code> — retry do service tự xử lý</li>
-          <li>Scope đảm bảo mỗi lần chạy có connection mới</li>
+          <li>Runtime toggle persist qua <code>table_sync_config.enabled</code> — sống sót restart</li>
         </ul>
       </div>
       <div>
         <p><b>Đăng ký trong Program.cs:</b></p>
-        <pre style="margin-top:6px"><span class="c">// Mỗi phút chạy 1 lần</span>
+        <pre style="margin-top:6px"><span class="c">// Mỗi phút chạy 1 lần — tất cả table đã đăng ký</span>
 RecurringJob.AddOrUpdate&lt;CentralDbSyncJobs&gt;(
     <span class="s">"central-db-sync-pilot"</span>,
     job => job.RunPilotAsync(CancellationToken.None),
     Cron.Minutely(),
     new RecurringJobOptions { QueueName = <span class="s">"data-sync"</span> });</pre>
-        <div class="callout key"><b>Scheduling guard:</b> Period phải lớn hơn p95 runtime. Bootstrap ~731ms, CT ~551ms — an toàn với interval 1 phút.</div>
+        <div class="callout key"><b>Multi-table:</b> Mỗi table chạy độc lập — lỗi table A không block table B.</div>
       </div>
     </div>
   </div>
@@ -762,16 +850,20 @@ IsTransient(): message contains "deadlock" | "timeout" | "connection"</pre>
         </table>
       </div>
       <div>
-        <div class="callout" style="margin-top:0;margin-bottom:10px"><b>⚠️ Dead data — documentation only.</b> Hiện tại <b>không có C# code nào đọc</b> từ <code>table_sync_config</code>. Config hardcode ở <code>CentralDbSyncJobs</code> và <code>CentralDbSyncController</code>. Xem <code>docs/notes/2026-07-19-config-read-gap.md</code>.</div>
-        <p><b>sync_meta.table_sync_config</b> — cấu hình sync cho từng table</p>
+        <div class="callout key" style="margin-top:0;margin-bottom:10px"><b>✅ Active since 2026-07-21.</b> <code>ISyncConfigStore</code> → <code>PostgresSyncConfigStore</code> đọc/ghi <code>table_sync_config.enabled</code> để runtime toggle. Seed tự động khi bootstrap thành công. Cron job filter disabled tables.</div>
+        <p><b>sync_meta.table_sync_config</b> — cấu hình sync cho từng table (full schema)</p>
         <table>
           <tr><th>Cột</th><th>Type</th><th>Mô tả</th></tr>
-          <tr><td><code>id</code></td><td><code>SERIAL PK</code></td><td></td></tr>
-          <tr><td><code>source_table</code></td><td><code>VARCHAR(255) UNIQUE</code></td><td>Tên table trên MSSQL (VD: CRM.Partners)</td></tr>
-          <tr><td><code>target_table</code></td><td><code>VARCHAR(255)</code></td><td>Tên table trên PostgreSQL</td></tr>
-          <tr><td><code>enabled</code></td><td><code>BOOLEAN DEFAULT TRUE</code></td><td>Bật/tắt sync</td></tr>
-          <tr><td><code>dependency_table</code></td><td><code>VARCHAR(255) NULL</code></td><td>Dependency (VD: cần Partners trước)</td></tr>
-          <tr><td><code>created_at / updated_at</code></td><td><code>TIMESTAMPTZ</code></td><td></td></tr>
+          <tr><td><code>source_table</code></td><td><code>TEXT PK</code></td><td>Tên table trên MSSQL (VD: CRM.Partners)</td></tr>
+          <tr><td><code>target_schema</code></td><td><code>TEXT NOT NULL</code></td><td>Schema trên PostgreSQL (VD: report)</td></tr>
+          <tr><td><code>target_table</code></td><td><code>TEXT NOT NULL</code></td><td>Tên table trên PostgreSQL (VD: partners)</td></tr>
+          <tr><td><code>sync_mode</code></td><td><code>TEXT NOT NULL</code></td><td>ChangeTracking / FullRefresh</td></tr>
+          <tr><td><code>sync_tier</code></td><td><code>TEXT NOT NULL</code></td><td>Hot / Warm / Cold</td></tr>
+          <tr><td><code>expected_sync_interval</code></td><td><code>INTERVAL</code></td><td>Tần suất sync kỳ vọng (VD: 1 min, 2 min)</td></tr>
+          <tr><td><code>max_allowed_lag</code></td><td><code>INTERVAL</code></td><td>Ngưỡng lag tối đa (VD: 5 min)</td></tr>
+          <tr><td><code>ownership_scope</code></td><td><code>TEXT</code></td><td>erp / report</td></tr>
+          <tr><td><code>enabled</code></td><td><code>BOOLEAN DEFAULT TRUE</code></td><td>Runtime toggle — bật/tắt recurring sync</td></tr>
+          <tr><td><code>dependency</code></td><td><code>TEXT[]</code></td><td>Dependency tables</td></tr>
         </table>
 
         <p style="margin-top:12px"><b>report.partners</b> — target data table</p>
@@ -962,14 +1054,21 @@ ITableSyncLock              → <span class="f">PostgresTableSyncLock</span>
 IBootstrapSnapshotReader    → <span class="f">SqlServerPartnersReader</span>  (MSSQL)
 IFullRefreshReader          → <span class="f">SqlServerPartnersReader</span>  (MSSQL)
 IChangeTrackingReader       → <span class="f">SqlServerPartnersReader</span>  (MSSQL)
-ISyncBatchApplier           → <span class="f">PostgresPartnersWriter</span>   (PostgreSQL)
+ISyncBatchApplier           → <span class="f">PostgresGenericApplier</span>    (PostgreSQL — generic, multi-table)
+IBootstrapRequestStore      → <span class="f">PostgresBootstrapRequestStore</span>
+IBootstrapJobScheduler      → <span class="f">HangfireBootstrapJobScheduler</span>
+ISyncConfigStore            → <span class="f">PostgresSyncConfigStore</span>  (runtime toggle)
+ISqlServerCtHealthCheck     → <span class="f">SqlServerCtHealthCheck</span>   (CT diagnostic)
 BootstrapSyncService        → <span class="f">BootstrapSyncService</span>
+BootstrapRequestService     → <span class="f">BootstrapRequestService</span>
 ChangeTrackingSyncService   → <span class="f">ChangeTrackingSyncService</span>
-ICentralDbSyncHealthService → <span class="f">CentralDbSyncHealthService</span>
+CentralDbSyncStatusService  → <span class="f">CentralDbSyncStatusService</span>
 SyncOrchestrator            → <span class="f">SyncOrchestrator</span>
 
 <span class="c">-- Controller --</span>
-CentralDbSyncController     (Scoped) ← inject: <b>BootstrapSyncService</b>, <b>ICentralDbSyncHealthService</b></pre>
+CentralDbSyncController     (Scoped) ← inject: <b>CentralDbSyncStatusService</b>,
+    <b>BootstrapRequestService</b>, <b>IMappingRuleProvider</b>,
+    <b>ISyncConfigStore</b>, <b>ISqlServerCtHealthCheck</b></pre>
 
     <div class="callout" style="margin-top:10px"><b>Interface segregation:</b> 3 reader interfaces (bootstrap, CT, full refresh) → 1 implementation <code>SqlServerPartnersReader</code>. Dễ dàng thay thế reader cho table khác mà không ảnh hưởng đến writer/logic.</div>
     <div class="callout key"><b>Connection pooling:</b> MSSQL <code>ErpReplicateConnection</code> (read-only replica) dùng cho reader. PostgreSQL <code>CentralDbConnection</code> dùng cho writer + checkpoint + log + lock. 2 connection strings riêng biệt, giảm load ERP primary.</div>
@@ -1011,11 +1110,11 @@ CentralDbSyncController     (Scoped) ← inject: <b>BootstrapSyncService</b>, <b
   </div>
 
   <footer class="page">
-    <b>Central DB Sync — Phase 1 Pilot</b><br>
-    Source: <code>[dbo].[CRM.Partners]</code> → <code>report.partners</code> · 348 rows · Change Tracking incremental sync<br>
-    Endpoints: <code>GET /health/{table}</code> · <code>POST /bootstrap/{table}</code> · Internal: Hangfire job + 7 DI services<br>
-    PostgreSQL: <code>sync_meta.checkpoint</code> · <code>sync_meta.sync_run_log</code> · <code>sync_meta.table_sync_config</code><br>
-    <span style="font-size:12px">Last updated: 2026-07-19 · <code>docs/central-database-blueprint/phase-1/central-db-sync-endpoints.html</code></span>
+    <b>Central DB Sync — Multi-table Phase 1</b><br>
+    Source: <code>CRM.Partners</code>, <code>ERP.Configs.Units</code>, <code>ERP.Configs.Sizes</code> · Change Tracking incremental sync<br>
+    Endpoints: <code>GET /{table}/status</code> · <code>POST /bootstrap/{table}</code> · <code>GET /tables</code> · <code>PATCH /{table}/enabled</code> · <code>GET /{table}/ct-status</code><br>
+    PostgreSQL: <code>sync_meta.checkpoint</code> · <code>sync_meta.sync_run_log</code> · <code>sync_meta.table_sync_config</code> · <code>sync_meta.bootstrap_request</code><br>
+    <span style="font-size:12px">Last updated: 2026-07-21 · <code>docs/Sync-DB-System-Doc/central-database-blueprint/artifacts/central-db-sync-endpoints.html</code></span>
   </footer>
 </div>
 </body>

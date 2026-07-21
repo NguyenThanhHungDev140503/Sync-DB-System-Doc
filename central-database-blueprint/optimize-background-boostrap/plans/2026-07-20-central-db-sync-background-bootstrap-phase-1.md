@@ -379,7 +379,63 @@ git add Infrastructure/CentralDbSync/CentralDbSyncInfrastructureExtensions.cs We
 git commit -m "feat: expose asynchronous bootstrap API"
 ~~~
 
-## Task 6: Document and verify the Phase 1 safety gate
+## Task 6: Runtime toggle (ISyncConfigStore)
+
+**Files:**
+- Create: Application/Features/CentralDbSync/Abstractions/ISyncConfigStore.cs
+- Create: Infrastructure/CentralDbSync/PostgresSyncConfigStore.cs
+- Modify: Infrastructure/CentralDbSync/CentralDbSyncInfrastructureExtensions.cs
+- Modify: Infrastructure/CentralDbSync/CentralDbSyncJobs.cs
+- Test: Tests/Ua.Application.UnitTests/CentralDbSync/PostgresSyncConfigStoreTests.cs
+
+- [x] **Steps: Implemented as part of build phase.**
+
+`PostgresSyncConfigStore` provides:
+- `GetAllAsync` — returns all registered `TableSyncConfig` rows
+- `IsEnabledAsync` — checks if a table is enabled
+- `SetEnabledAsync` — toggles enabled flag (simple UPDATE)
+- `SeedAsync` — full upsert with all config fields
+
+`RunAsync` now filters out disabled tables before recurring execution.
+`RunBootstrapAsync` calls `SeedAsync` on successful completion.
+
+## Task 7: Change Tracking health check
+
+**Files:**
+- Create: Application/Features/CentralDbSync/Abstractions/ISqlServerCtHealthCheck.cs
+- Create: Infrastructure/CentralDbSync/SqlServerCtHealthCheck.cs
+- Modify: Infrastructure/CentralDbSync/CentralDbSyncInfrastructureExtensions.cs
+
+- [x] **Steps: Implemented as part of build phase.**
+
+`SqlServerCtHealthCheck` queries `sys.change_tracking_tables` for the given source table and returns whether Change Tracking is enabled.
+
+## Task 8: Table management endpoints
+
+**Files:**
+- Modify: WebApi/Controllers/CentralDbSyncController.cs
+- Modify: Infrastructure/CentralDbSync/CentralDbSyncInfrastructureExtensions.cs
+
+- [x] **Steps: Implemented as part of build phase.**
+
+| Method | Route | Purpose |
+|---|---|---|
+| GET | `/api/central-db-sync/tables` | List all registered tables with enabled state |
+| PATCH | `/api/central-db-sync/{sourceTable}/enabled` | Enable/disable a table at runtime |
+| GET | `/api/central-db-sync/{sourceTable}/ct-status` | Check Change Tracking status on the source |
+
+`SetEnabledAsync` throws `InvalidOperationException` if the UPDATE affects 0 rows.
+
+## Task 9: Open-generic DI registration
+
+**Files:**
+- Modify: Infrastructure/CentralDbSync/CentralDbSyncInfrastructureExtensions.cs
+
+- [x] **Steps: Implemented as part of build phase.**
+
+`PostgresGenericReader<>` and `PostgresGenericWriter<>` registered as open-generic scoped services, eliminating per-table manual registrations.
+
+## Task 10: Document and verify the Phase 1 safety gate
 
 **Files:**
 - Modify: README.md
@@ -397,8 +453,8 @@ Expected: PASS, with PostgreSQL integration tests explicitly skipped only withou
 - [ ] **Step 4: Commit documentation after checks pass.**
 
 ~~~bash
-git add README.md
-git commit -m "docs: document background bootstrap operation"
+cd /workspace/ua-app && git add README.md && git commit -m "docs: document background bootstrap operation"
+~~~
 ~~~
 
 ## Definition of Done

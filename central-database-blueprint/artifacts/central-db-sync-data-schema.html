@@ -114,13 +114,13 @@
   <!-- ================================================================ -->
 
   <div class="card">
-    <p>Central DB Sync sử dụng <b>2 schemas</b> trên PostgreSQL, tổng cộng <b>4 bảng</b>:</p>
+    <p>Central DB Sync sử dụng <b>2 schemas</b> trên PostgreSQL, tổng cộng <b>5 bảng</b>:</p>
     <table>
       <tr><th>Schema</th><th>Table</th><th>Loại</th><th>Mục đích</th></tr>
       <tr>
         <td><code>sync_meta</code></td><td><code>table_sync_config</code></td>
         <td><span class="badge config">Config</span></td>
-        <td>Đăng ký những table nào được sync, cấu hình sync mode, tier, dependency</td>
+        <td>Đăng ký + runtime toggle: source_table, target, sync_mode, tier, interval, enabled</td>
       </tr>
       <tr>
         <td><code>sync_meta</code></td><td><code>checkpoint</code></td>
@@ -133,9 +133,14 @@
         <td>Append-only log — mỗi sync run là 1 row</td>
       </tr>
       <tr>
-        <td><code>report</code></td><td><code>partners</code></td>
+        <td><code>sync_meta</code></td><td><code>bootstrap_request</code></td>
+        <td><span class="badge config">Request</span></td>
+        <td>Work ticket cho bootstrap: request_id, status lifecycle, attempt tracking</td>
+      </tr>
+      <tr>
+        <td><code>report</code></td><td><code>partners</code> / <code>units</code> / <code>sizes</code></td>
         <td><span class="badge data">Target data</span></td>
-        <td>Dữ liệu partner đã sync từ ERP, dùng cho reporting</td>
+        <td>Dữ liệu đã sync từ ERP, dùng cho reporting</td>
       </tr>
     </table>
     <div class="callout key">Quan hệ: <code>checkpoint.source_table</code> → FK → <code>table_sync_config.source_table</code>. <code>sync_run_log.source_table</code> là logical FK (không enforced).</div>
@@ -150,7 +155,7 @@
       <h3 style="margin:0">sync_meta.table_sync_config</h3>
       <span class="badge config">Config registry</span>
     </div>
-    <p class="note" style="margin-top:6px">Sổ đăng ký — khai báo những table nào được sync engine quản lý. Mỗi table chỉ có <b>1 row</b>. Dữ liệu được <b>seed thủ công</b> qua SQL script, không tự động insert từ code.</p>
+    <p class="note" style="margin-top:6px">Sổ đăng ký — khai báo những table nào được sync engine quản lý. Mỗi table chỉ có <b>1 row</b>. Dữ liệu được <b>seed tự động</b> khi bootstrap thành công qua <code>PostgresSyncConfigStore.SeedAsync()</code>. Cũng có thể seed thủ công qua SQL script.</p>
 
     <h4>Field definitions:</h4>
     <table>
@@ -252,8 +257,8 @@
       <span class="step">SyncOrchestrator</span> <span class="arrow">→</span> nhận <span class="table-ref">TableSyncConfig[]</span> từ caller — không đọc từ DB. Config hiện hardcode trong <code>CentralDbSyncJobs</code>.<br>
       <span class="step">Controller</span> <span class="arrow">→</span> validate qua <code>RegisteredTables</code> hardcode — không đọc từ DB<br>
       <span class="step">checkpoint</span> <span class="arrow">→</span> FK reference <span class="table-ref">table_sync_config.source_table</span> (source_table là PK)
-      <div class="note" style="margin-top:6px">📍 Bảng này chỉ ghi 1 lần khi seed. Không có component nào update table_sync_config trong runtime.</div>
-      <div class="callout danger"><b>⚠️ Dead data — documentation only.</b> Hiện tại <b>không có C# code nào đọc</b> từ <code>table_sync_config</code>. Config được hardcode ở <code>CentralDbSyncJobs.RunPilotAsync()</code> và <code>CentralDbSyncController</code>. Xem <code>docs/notes/2026-07-19-config-read-gap.md</code> để biết chi tiết.</div>
+      <div class="note" style="margin-top:6px">📍 <b>Active runtime:</b> <code>ISyncConfigStore</code> đọc <code>enabled</code> qua <code>IsEnabledAsync</code>/<code>GetAllEnabledAsync</code>, ghi toggle qua <code>SetEnabledAsync</code>. Seed tự động qua <code>SeedAsync(config)</code> khi bootstrap success.</div>
+      <div class="callout key"><b>✅ Active (2026-07-21).</b> Xem <code>docs/notes/2026-07-19-config-read-gap.md</code> — gap đã được đóng bởi <code>ISyncConfigStore</code> → <code>PostgresSyncConfigStore</code>.</div>
     </div>
   </div>
 
@@ -426,7 +431,7 @@
         • Bootstrap: UPDATE checkpoint SET version + status = 'ready' (trong cùng transaction với data upsert)<br>
         • CT batch: UPDATE checkpoint SET version (optimistic guard trong cùng transaction)
       </div>
-      <span class="step" style="margin-top:6px;display:inline-block">CentralDbSyncHealthService</span>
+      <span class="step" style="margin-top:6px;display:inline-block">CentralDbSyncStatusService</span>
       <div style="padding-left:16px;margin-top:4px">
         • Đọc checkpoint → quyết định Healthy / Degraded / Unknown
       </div>
@@ -859,9 +864,9 @@
 
   <footer class="page">
     <b>Central DB Sync — Phase 1 Pilot · Data Schema Reference</b><br>
-    PostgreSQL schemas: <code>sync_meta</code> (3 tables) · <code>report</code> (1 table)<br>
-    Field count: <code>table_sync_config</code> (10) · <code>checkpoint</code> (9) · <code>sync_run_log</code> (15) · <code>partners</code> (12)<br>
-    <span style="font-size:12px">Last updated: 2026-07-19</span>
+    PostgreSQL schemas: <code>sync_meta</code> (4 tables) · <code>report</code> (1 schema)<br>
+    Field count: <code>table_sync_config</code> (10) · <code>checkpoint</code> (9) · <code>sync_run_log</code> (15) · <code>bootstrap_request</code> (11) · <code>partners</code> (12)<br>
+    <span style="font-size:12px">Last updated: 2026-07-21</span>
   </footer>
 </div>
 </body>
