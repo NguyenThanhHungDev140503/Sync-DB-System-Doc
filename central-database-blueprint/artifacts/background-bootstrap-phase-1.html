@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CORE-MOBILE-APP-Reporting — Central DB Sync — Background Bootstrap Phase 1</title>
+<style>
+  :root {
+    --bg: #0f1420;
+    --panel: #161d2d;
+    --panel-2: #1c2637;
+    --ink: #e8edf6;
+    --muted: #93a1b8;
+    --border: #2a3550;
+    --accent-1: #5cc8ff;
+    --accent-1-bg: #12222e;
+    --accent-2: #a98bff;
+    --accent-2-bg: #211b35;
+    --good: #52d99a;
+    --good-bg: #12251c;
+    --warn: #ffd166;
+    --warn-bg: #2c2616;
+    --danger: #ff6b6b;
+    --danger-bg: #2a1515;
+    --code-bg: #0b0f18;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--ink); font-family:system-ui,-apple-system,sans-serif; line-height:1.6; padding:40px 20px; }
+  .wrap { max-width:1000px; margin:0 auto; }
+  header.page { border-bottom:1px solid var(--border); padding-bottom:20px; margin-bottom:30px; }
+  header.page h1 { font-size:28px; font-weight:700; }
+  header.page .sub { color:var(--muted); font-size:14px; margin-top:6px; }
+
+  h2.section { font-size:20px; font-weight:600; margin:36px 0 16px; padding-bottom:8px; border-bottom:1px solid var(--border); color:var(--ink); }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:18px 20px; margin-bottom:16px; }
+  .card p.note { color:var(--muted); font-size:14px; }
+
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:14px; }
+  th, td { text-align:left; padding:8px 12px; border:1px solid var(--border); }
+  th { background:var(--panel-2); color:var(--muted); font-weight:600; }
+  td { background:var(--panel); }
+  .col-type { font-family:monospace; color:var(--accent-1); font-size:13px; }
+  .col-pk { color:var(--warn); font-weight:600; }
+
+  .callout { padding:12px 16px; border-radius:8px; margin:12px 0; font-size:14px; border-left:4px solid var(--warn); background:var(--warn-bg); }
+  .callout.key { border-left-color:var(--good); background:var(--good-bg); }
+  .callout.danger { border-left-color:var(--danger); background:var(--danger-bg); }
+  .callout.accent-1 { border-left-color:var(--accent-1); background:var(--accent-1-bg); }
+  .callout.accent-2 { border-left-color:var(--accent-2); background:var(--accent-2-bg); }
+
+  pre { background:var(--code-bg); border:1px solid var(--border); border-radius:8px; padding:14px 16px; font-size:13px; line-height:1.5; overflow-x:auto; margin:12px 0; font-family:'JetBrains Mono','Cascadia Code','Fira Code',monospace; }
+
+  .badge { display:inline-block; font-size:11px; font-weight:600; padding:2px 8px; border-radius:4px; text-transform:uppercase; letter-spacing:.3px; }
+  .badge.good { background:var(--good-bg); color:var(--good); }
+  .badge.warn { background:var(--warn-bg); color:var(--warn); }
+  .badge.danger { background:var(--danger-bg); color:var(--danger); }
+  .badge.accent-1 { background:var(--accent-1-bg); color:var(--accent-1); }
+  .badge.accent-2 { background:var(--accent-2-bg); color:var(--accent-2); }
+
+  .flow-box { background:var(--code-bg); border:1px solid var(--border); border-radius:8px; padding:14px 16px; font-size:13px; font-family:'JetBrains Mono','Cascadia Code','Fira Code',monospace; line-height:1.7; margin:12px 0; }
+  .k { color:#ff79c6; }
+  .f { color:#50fa7b; }
+  .c { color:#6272a4; font-style:italic; }
+  .s { color:#f1fa8c; }
+  .err { color:var(--danger); }
+  .dim { color:var(--muted); }
+  .step { color:var(--accent-1); }
+  .table-ref { color:var(--accent-2); }
+  .good { color:var(--good); }
+  .arrow { color:var(--muted); }
+  .note { color:var(--muted); font-style:italic; }
+  code.path { background:var(--panel-2); padding:1px 6px; border-radius:4px; font-size:13px; }
+
+  ul.files-list { list-style:none; padding:0; margin:12px 0; }
+  ul.files-list li { padding:6px 0; border-bottom:1px solid var(--border); font-size:14px; }
+  ul.files-list li:last-child { border-bottom:none; }
+  ul.files-list code { background:var(--panel-2); padding:1px 6px; border-radius:4px; font-size:13px; }
+
+  footer.page { border-top:1px solid var(--border); padding-top:20px; margin-top:40px; color:var(--muted); font-size:13px; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="page">
+    <h1>CORE-MOBILE-APP-Reporting — Background Bootstrap Phase 1</h1>
+    <div class="sub"><code class="path">sync_meta.bootstrap_request</code> · Durable work ticket + async job for manual bootstrap sync</div>
+  </header>
+
+  <h2 class="section">I. Tổng quan</h2>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge good">Phase 1</span>
+      <h3 style="margin:0">Mục tiêu</h3>
+    </div>
+    <p class="note" style="margin-top:6px">
+      Cho phép admin kích hoạt bootstrap sync bất đồng bộ qua API. Trả về HTTP 202 ngay lập tức,
+      Hangfire chạy <code>BootstrapSyncService</code> trong background. Trạng thái request được persist
+      trong <span class="table-ref">sync_meta.bootstrap_request</span> và có thể query qua API status endpoint.
+    </p>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge good">Design Decision</span>
+      <h3 style="margin:0">Tại sao có bảng bootstrap_request riêng?</h3>
+    </div>
+    <div style="margin-top:10px;font-size:14px">
+      <p>Hangfire quản lý <em>execution scheduling</em>, còn <span class="table-ref">sync_meta.bootstrap_request</span> quản lý <em>business workflow state</em>:</p>
+      <ul style="margin:8px 0 0 20px;color:var(--muted)">
+        <li><b>Business states riêng:</b> <code>pending_enqueue</code>, <code>waiting_for_lock</code> — không có trong Hangfire</li>
+        <li><b>Partial unique index</b> đảm bảo một request active / table tại một thời điểm</li>
+        <li><b>requestId = runId:</b> UUID dùng chung cho sync_run_log, tạo correlation trace</li>
+        <li><b>Reconciliation:</b> Job recover request bị orphan (crash trước enqueue)</li>
+        <li><b>API Status:</b> <code>GET /bootstrap/{requestId}</code> đọc từ store riêng, độc lập Hangfire</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout accent-1">
+    <b>Kiến trúc tổng thể:</b> Controller (<span class="step">WebApi</span>) → <span class="step">BootstrapRequestService</span> (Application) → <span class="step">PostgresBootstrapRequestStore</span> (Infrastructure) + <span class="step">HangfireBootstrapJobScheduler</span> → <span class="step">CentralDbSyncJobs.RunBootstrapAsync</span> → <span class="step">BootstrapSyncService</span>
+  </div>
+
+  <h2 class="section">II. Luồng hoạt động</h2>
+
+  <div class="card">
+    <h3>2.1 Request Flow — Submit → Execution → Complete</h3>
+    <div class="flow-box">
+      <span class="good">Client</span> <span class="arrow">→</span> <span class="f">POST /api/central-db-sync/bootstrap/{table}</span><br>
+      <div style="padding-left:16px;margin-top:4px">
+        ├─ <span class="step">CentralDbSyncController.TriggerBootstrap</span><br>
+        │  ├─ <span class="dim">1. Kiểm tra RegisteredTables (hardcoded set)</span><br>
+        │  └─ <span class="dim">2. Nếu không hợp lệ → 400 BadRequest</span><br>
+        ├─ <span class="step">BootstrapRequestService.SubmitAsync</span><br>
+        │  ├─ <span class="step">requestStore.CreateOrGetActiveAsync</span><br>
+        │  │  ├─ <span class="dim">1. SELECT active request → nếu có → return (IsNewRequest=false)</span><br>
+        │  │  ├─ <span class="dim">2. INSERT + ON CONFLICT → nếu conflict → return existing</span><br>
+        │  │  └─ <span class="dim">3. Mới → return PendingEnqueue (IsNewRequest=true)</span><br>
+        │  ├─ <span class="good">[Mới]</span> <span class="step">scheduler.EnqueueAsync</span> <span class="arrow">→</span> Hangfire enqueue<br>
+        │  │  └─ <span class="dim">Hangfire gọi ngay CentralDbSyncJobs.RunBootstrapAsync</span><br>
+        │  ├─ <span class="step">requestStore.MarkQueuedAsync</span> <span class="arrow">→</span> status = queued<br>
+        │  │  └─ <span class="callout" style="display:inline;padding:2px 8px">⚠ Nếu job claim trước → MarkQueuedAsync fail (status running)</span><br>
+        │  └─ <span class="step">requestStore.GetAsync</span> <span class="arrow">→</span> reload trạng thái mới nhất<br>
+        ├─ <span class="step">CentralDbSyncJobs.RunBootstrapAsync</span><br>
+        │  ├─ <span class="step">requestStore.TryMarkRunningAsync</span> <span class="arrow">→</span> status = running<br>
+        │  │  └─ <span class="dim">Chấp nhận pending_enqueue, queued, waiting_for_lock</span><br>
+        │  ├─ <span class="step">BootstrapSyncService.ExecuteAsync</span><br>
+        │  │  ├─ <span class="good">[Lock OK]</span> reader → applier → log → return Succeeded<br>
+        │  │  ├─ <span class="warn">[Lock Busy]</span> return SkippedLocked<br>
+        │  │  └─ <span class="err">[Error]</span> log failed → return Failed (checkpoint unchanged)<br>
+        │  └─ <span class="f">switch</span> (Outcome)<br>
+        │     ├─ <span class="good">Succeeded</span> <span class="arrow">→</span> MarkCompletedAsync<br>
+        │     ├─ <span class="warn">SkippedLocked</span> <span class="arrow">→</span> MarkWaitingForLock → ScheduleAsync(1m) → MarkQueuedAsync<br>
+        │     └─ <span class="err">default</span> <span class="arrow">→</span> MarkFailedAsync<br>
+        └─ <span class="step">Client</span> nhận HTTP 202 + statusUrl<br>
+           └─ <span class="f">GET</span> statusUrl <span class="arrow">→</span> <span class="step">GetBootstrapStatus</span> <span class="arrow">→</span> HTTP 200 với trạng thái hiện tại
+      </div>
+    </div>
+    <pre><span class="c">// Application/Features/CentralDbSync/Services/BootstrapRequestService.cs:17</span>
+<span class="k">public async</span> Task&lt;BootstrapRequestResult&gt; <span class="f">SubmitAsync</span>(
+    string sourceTable, CancellationToken ct)
+{
+    var result = <span class="k">await</span> <span class="f">requestStore</span>.<span class="f">CreateOrGetActiveAsync</span>(sourceTable, ct);
+    <span class="k">if</span> (!result.IsNewRequest) <span class="k">return</span> result;
+
+    var hangfireJobId = <span class="k">await</span> <span class="f">scheduler</span>.<span class="f">EnqueueAsync</span>(sourceTable, requestId, ct);
+    <span class="k">await</span> <span class="f">requestStore</span>.<span class="f">MarkQueuedAsync</span>(requestId, hangfireJobId, ct);
+    var updated = <span class="k">await</span> <span class="f">requestStore</span>.<span class="f">GetAsync</span>(requestId, ct);
+    <span class="k">return new</span> BootstrapRequestResult(updated ?? result.Request, <span class="k">true</span>);
+}</pre>
+    <p class="note" style="margin-top:8px">📍 <code>Application/Features/CentralDbSync/Services/BootstrapRequestService.cs</code></p>
+  </div>
+
+  <div class="card">
+    <h3>2.2 Status State Machine</h3>
+    <div class="flow-box" style="font-size:14px">
+      <span style="color:var(--warn)">pending_enqueue</span><br>
+      <div style="padding-left:16px">
+        ├─ <span class="arrow">→</span> <span class="step">MarkQueuedAsync</span> <span class="arrow">→</span> <span style="color:var(--accent-1)">queued</span><br>
+        │  └─ <span class="arrow">→</span> <span class="step">TryMarkRunningAsync</span> <span class="arrow">→</span> <span style="color:var(--good)">running</span><br>
+        │     ├─ <span class="arrow">→</span> <span class="step">MarkCompletedAsync</span> <span class="arrow">→</span> <span style="color:var(--muted)">completed</span><br>
+        │     ├─ <span class="arrow">→</span> <span class="step">MarkWaitingForLockAsync</span> <span class="arrow">→</span> <span style="color:var(--warn)">waiting_for_lock</span><br>
+        │     │  └─ <span class="arrow">→</span> <span class="step">MarkQueuedAsync</span> <span class="arrow">→</span> <span style="color:var(--accent-1)">queued</span> (reschedule loop)<br>
+        │     └─ <span class="arrow">→</span> <span class="step">MarkFailedAsync</span> <span class="arrow">→</span> <span style="color:var(--danger)">failed</span><br>
+        └─ <span class="arrow">→</span> <span class="step">TryMarkRunningAsync</span> <span class="arrow">→</span> <span style="color:var(--good)">running</span> (job claim trước MarkQueuedAsync)<br>
+           └─ (same as above)
+      </div>
+    </div>
+
+    <table>
+      <tr><th>Transition</th><th>From</th><th>To</th><th>Method</th><th>Ghi chú</th></tr>
+      <tr>
+        <td><span class="badge good">Create</span></td>
+        <td>—</td>
+        <td><code>pending_enqueue</code></td>
+        <td><code>CreateOrGetActiveAsync</code></td>
+        <td>INSERT với ON CONFLICT guard</td>
+      </tr>
+      <tr>
+        <td><span class="badge accent-1">Enqueue</span></td>
+        <td><code>pending_enqueue</code><br><code>waiting_for_lock</code></td>
+        <td><code>queued</code></td>
+        <td><code>MarkQueuedAsync</code></td>
+        <td>Sau khi Hangfire enqueue/schedule</td>
+      </tr>
+      <tr>
+        <td><span class="badge good">Claim</span></td>
+        <td><code>pending_enqueue</code><br><code>queued</code><br><code>waiting_for_lock</code></td>
+        <td><code>running</code></td>
+        <td><code>TryMarkRunningAsync</code></td>
+        <td>Hangfire job claim request</td>
+      </tr>
+      <tr>
+        <td><span class="badge warn">Lock Wait</span></td>
+        <td><code>running</code></td>
+        <td><code>waiting_for_lock</code></td>
+        <td><code>MarkWaitingForLockAsync</code></td>
+        <td>Lock busy, sẽ retry sau 1 phút</td>
+      </tr>
+      <tr>
+        <td><span class="badge good">Success</span></td>
+        <td><code>running</code></td>
+        <td><code>completed</code></td>
+        <td><code>MarkCompletedAsync</code></td>
+        <td>Bootstrap hoàn tất</td>
+      </tr>
+      <tr>
+        <td><span class="badge danger">Failure</span></td>
+        <td><code>running</code></td>
+        <td><code>failed</code></td>
+        <td><code>MarkFailedAsync</code></td>
+        <td>Lỗi enqueue, execution, reconciliation</td>
+      </tr>
+    </table>
+    <p class="note" style="margin-top:8px">📍 <code>Application/Features/CentralDbSync/Models/BootstrapRequest.cs:3-11</code></p>
+  </div>
+
+  <h2 class="section">III. Database Schema</h2>
+
+  <div class="card">
+    <h3>3.1 sync_meta.bootstrap_request</h3>
+    <table>
+      <tr><th>Column</th><th>Type</th><th>Required</th><th>Mô tả</th></tr>
+      <tr><td><code>request_id</code></td><td class="col-type">UUID</td><td><span class="col-pk">PK</span></td><td>Primary key, đồng thời là runId cho sync_run_log</td></tr>
+      <tr><td><code>source_table</code></td><td class="col-type">TEXT</td><td>NOT NULL</td><td>Tên bảng nguồn (VD: CRM.Partners)</td></tr>
+      <tr><td><code>status</code></td><td class="col-type">TEXT</td><td>NOT NULL</td><td>pending_enqueue · queued · running · waiting_for_lock · completed · failed</td></tr>
+      <tr><td><code>hangfire_job_id</code></td><td class="col-type">TEXT</td><td></td><td>Hangfire job ID để track trong dashboard</td></tr>
+      <tr><td><code>rows_staged</code></td><td class="col-type">BIGINT</td><td>DEFAULT 0</td><td>Số dòng đã stage (future phase)</td></tr>
+      <tr><td><code>total_rows_expected</code></td><td class="col-type">BIGINT</td><td></td><td>Tổng số dòng ước tính (future phase)</td></tr>
+      <tr><td><code>attempt_count</code></td><td class="col-type">INTEGER</td><td>DEFAULT 0</td><td>Số lần chạy, tăng mỗi lần claim</td></tr>
+      <tr><td><code>requested_at</code></td><td class="col-type">TIMESTAMPTZ</td><td>NOT NULL</td><td>Thời điểm request được tạo</td></tr>
+      <tr><td><code>started_at</code></td><td class="col-type">TIMESTAMPTZ</td><td></td><td>Thời điểm chạy đầu tiên</td></tr>
+      <tr><td><code>finished_at</code></td><td class="col-type">TIMESTAMPTZ</td><td></td><td>Thời điểm kết thúc</td></tr>
+      <tr><td><code>updated_at</code></td><td class="col-type">TIMESTAMPTZ</td><td>NOT NULL</td><td>Last modified timestamp</td></tr>
+      <tr><td><code>error_code</code></td><td class="col-type">TEXT</td><td></td><td>Mã lỗi (BootstrapFailed, BootstrapEnqueueFailed, v.v.)</td></tr>
+      <tr><td><code>error_message</code></td><td class="col-type">TEXT</td><td></td><td>Chi tiết lỗi</td></tr>
+    </table>
+    <div class="callout key">
+      <b>Partial Unique Index:</b> <code>ux_bootstrap_request_active_table ON (source_table) WHERE status IN ('pending_enqueue','queued','running','waiting_for_lock')</code> — đảm bảo chỉ có 1 request active / table.
+    </div>
+    <pre><span class="c">-- Infrastructure/Database/SqlScript/CentralDbSync/001-central-db-sync-schema.sql:108</span>
+<span class="k">CREATE TABLE IF NOT EXISTS</span> <span class="table-ref">sync_meta.bootstrap_request</span> (
+    request_id               <span class="col-type">UUID</span>        PRIMARY KEY,
+    source_table             <span class="col-type">TEXT</span>        NOT NULL,
+    status                   <span class="col-type">TEXT</span>        NOT NULL,
+    hangfire_job_id          <span class="col-type">TEXT</span>,
+    rows_staged              <span class="col-type">BIGINT</span>      NOT NULL DEFAULT 0,
+    total_rows_expected      <span class="col-type">BIGINT</span>,
+    attempt_count            <span class="col-type">INTEGER</span>     NOT NULL DEFAULT 0,
+    requested_at             <span class="col-type">TIMESTAMPTZ</span> NOT NULL DEFAULT NOW(),
+    started_at               <span class="col-type">TIMESTAMPTZ</span>,
+    finished_at              <span class="col-type">TIMESTAMPTZ</span>,
+    updated_at               <span class="col-type">TIMESTAMPTZ</span> NOT NULL DEFAULT NOW(),
+    error_code               <span class="col-type">TEXT</span>,
+    error_message            <span class="col-type">TEXT</span>
+);
+
+<span class="k">CREATE UNIQUE INDEX IF NOT EXISTS</span> ux_bootstrap_request_active_table
+    <span class="k">ON</span> sync_meta.bootstrap_request (source_table)
+    <span class="k">WHERE</span> status IN ('pending_enqueue','queued','running','waiting_for_lock');</pre>
+    <p class="note" style="margin-top:8px">📍 <code>Infrastructure/Database/SqlScript/CentralDbSync/001-central-db-sync-schema.sql:108-133</code></p>
+  </div>
+
+  <div class="card">
+    <h3>3.2 Các bảng liên quan trong Central DB (PostgreSQL)</h3>
+    <table>
+      <tr><th>Table</th><th>Schema</th><th>Vai trò</th></tr>
+      <tr><td><span class="table-ref">bootstrap_request</span></td><td>sync_meta</td><td>Work ticket cho bootstrap (Phase 1 — scope của artifact này)</td></tr>
+      <tr><td><span class="table-ref">checkpoint</span></td><td>sync_meta</td><td>Trạng thái sync progress — KHÔNG thay đổi khi bootstrap lỗi</td></tr>
+      <tr><td><span class="table-ref">sync_run_log</span></td><td>sync_meta</td><td>Audit log, runId = requestId từ bootstrap_request</td></tr>
+      <tr><td><span class="table-ref">table_sync_config</span></td><td>sync_meta</td><td>Đăng ký bảng sync (CRM.Partners)</td></tr>
+      <tr><td><span class="table-ref">partners</span></td><td>report</td><td>Target table — dữ liệu denormalised từ CRM.Partners</td></tr>
+    </table>
+    <p class="note" style="margin-top:8px">📍 <code>Infrastructure/Database/SqlScript/CentralDbSync/001-central-db-sync-schema.sql</code></p>
+  </div>
+
+  <h2 class="section">IV. API Endpoints</h2>
+
+  <div class="card">
+    <h3>4.1 Trigger Bootstrap</h3>
+    <div class="flow-box">
+      <span class="f">POST</span> /api/central-db-sync/bootstrap/{sourceTable}<br>
+      <span class="dim">Auth: Bearer JWT · Content-Type: application/json</span>
+    </div>
+    <pre><span class="c">// WebApi/Controllers/CentralDbSyncController.cs:59</span>
+[<span class="f">HttpPost</span>(<span class="s">"bootstrap/{sourceTable}"</span>)]
+<span class="k">public async</span> Task&lt;IActionResult&gt; <span class="f">TriggerBootstrap</span>(
+    string sourceTable, CancellationToken ct)
+{
+    <span class="k">if</span> (!RegisteredTables.Contains(sourceTable))
+        <span class="k">return</span> BadRequest(new { message = ..., allowedTables = ... });
+
+    var result = <span class="k">await</span> <span class="f">requestService</span>.<span class="f">SubmitAsync</span>(sourceTable, ct);
+    <span class="k">return</span> <span class="f">AcceptedAtAction</span>(nameof(GetBootstrapStatus), ..., new {
+        requestId = result.Request.RequestId,
+        hangfireJobId = result.Request.HangfireJobId,
+        sourceTable,
+        status = result.Request.Status,
+        statusUrl = ...
+    });
+}</pre>
+    <p class="note" style="margin-top:8px">📍 <code>WebApi/Controllers/CentralDbSyncController.cs:59-94</code></p>
+    <table>
+      <tr><th>Scenario</th><th>HTTP</th><th>Response</th></tr>
+      <tr><td>New request</td><td><span class="badge good">202</span></td><td><code>{ requestId, hangfireJobId, sourceTable, status: "queued", statusUrl }</code></td></tr>
+      <tr><td>Duplicate (active exists)</td><td><span class="badge good">202</span></td><td>Cùng requestId, trạng thái hiện tại</td></tr>
+      <tr><td>Unknown table</td><td><span class="badge danger">400</span></td><td><code>{ message, allowedTables }</code></td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>4.2 Get Bootstrap Status</h3>
+    <div class="flow-box">
+      <span class="f">GET</span> /api/central-db-sync/bootstrap/{requestId:guid}<br>
+      <span class="dim">Auth: Bearer JWT</span>
+    </div>
+    <pre><span class="c">// WebApi/Controllers/CentralDbSyncController.cs:100</span>
+[<span class="f">HttpGet</span>(<span class="s">"bootstrap/{requestId:guid}"</span>)]
+<span class="k">public async</span> Task&lt;IActionResult&gt; <span class="f">GetBootstrapStatus</span>(
+    Guid requestId, CancellationToken ct)
+{
+    var request = <span class="k">await</span> <span class="f">requestService</span>.<span class="f">GetStatusAsync</span>(requestId, ct);
+    <span class="k">if</span> (request <span class="k">is null</span>)
+        <span class="k">return</span> <span class="f">NotFound</span>(new { message = ... });
+
+    <span class="k">return</span> <span class="f">Ok</span>(new {
+        requestId, sourceTable, status, hangfireJobId,
+        rowsStaged, totalRowsExpected, attemptCount,
+        requestedAt, startedAt, finishedAt,
+        errorCode, errorMessage
+    });
+}</pre>
+    <p class="note" style="margin-top:8px">📍 <code>WebApi/Controllers/CentralDbSyncController.cs:100-126</code></p>
+    <table>
+      <tr><th>Scenario</th><th>HTTP</th><th>Response</th></tr>
+      <tr><td>Request exists</td><td><span class="badge good">200</span></td><td>Full request state (status, timestamps, counters)</td></tr>
+      <tr><td>Request not found</td><td><span class="badge danger">404</span></td><td><code>{ message }</code></td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>4.3 Hangfire Dashboard</h3>
+    <p><code>/hangfire</code> — quan sát trực tiếp job execution, retry, queue</p>
+    <pre><span class="c">// WebApi/Program.cs:116</span>
+app.<span class="f">UseHangfireDashboard</span>(<span class="s">"/hangfire"</span>);
+
+<span class="c">// Register pilot recurring job</span>
+<span class="f">RecurringJob.AddOrUpdate</span>&lt;CentralDbSyncJobs&gt;(
+    <span class="s">"central-db-sync:CRM.Partners"</span>,
+    job => job.<span class="f">RunPilotAsync</span>(CancellationToken.None),
+    <span class="f">Cron.Minutely</span>(),
+    new RecurringJobOptions { QueueName = <span class="s">"data-sync"</span> });
+
+<span class="c">// Register bootstrap reconciliation (every 5 minutes)</span>
+<span class="f">RecurringJob.AddOrUpdate</span>&lt;CentralDbSyncJobs&gt;(
+    <span class="s">"central-db-sync:reconcile-bootstrap-requests"</span>,
+    job => job.<span class="f">ReconcilePendingBootstrapRequestsAsync</span>(),
+    <span class="f">Cron.MinuteInterval</span>(5),
+    new RecurringJobOptions { QueueName = <span class="s">"data-sync"</span> });</pre>
+    <p class="note" style="margin-top:8px">📍 <code>WebApi/Program.cs:116-131</code></p>
+  </div>
+
+  <h2 class="section">V. Tương tác giữa các thành phần</h2>
+
+  <div class="card">
+    <h3>5.1 Component Diagram</h3>
+    <div class="flow-box" style="font-size:14px">
+      <span class="step" style="font-size:15px;font-weight:600">WebApi Layer</span><br>
+      <div style="padding-left:16px">
+        ├─ <span class="step">CentralDbSyncController</span> <span class="dim">— REST endpoints</span><br>
+        │  ├─ POST /bootstrap/{table}<span class="dim"> → gọi BootstrapRequestService.SubmitAsync</span><br>
+        │  └─ GET /bootstrap/{id}<span class="dim"> → gọi BootstrapRequestService.GetStatusAsync</span><br>
+        └─ <span class="step">CentralDbSyncHealthService</span><span class="dim"> — health check</span>
+      </div>
+      <br>
+      <span class="step" style="font-size:15px;font-weight:600">Application Layer</span><br>
+      <div style="padding-left:16px">
+        ├─ <span class="step">BootstrapRequestService</span><span class="dim"> — orchestrates submit + reconciliation</span><br>
+        │  ├─ <span class="dim">→ IBootstrapRequestStore (abstraction)</span><br>
+        │  └─ <span class="dim">→ IBootstrapJobScheduler (abstraction)</span><br>
+        └─ <span class="step">BootstrapSyncService</span><span class="dim"> — thực thi bootstrap sync</span>
+      </div>
+      <br>
+      <span class="step" style="font-size:15px;font-weight:600">Infrastructure Layer</span><br>
+      <div style="padding-left:16px">
+        ├─ <span class="step">PostgresBootstrapRequestStore</span><span class="dim"> — Dapper + Npgsql</span><br>
+        ├─ <span class="step">HangfireBootstrapJobScheduler</span><span class="dim"> — IBackgroundJobClient</span><br>
+        ├─ <span class="step">CentralDbSyncJobs</span><span class="dim"> — Hangfire job entry point</span><br>
+        │  ├─ <span class="dim">RunBootstrapAsync(sourceTable, requestId)</span><br>
+        │  └─ <span class="dim">ReconcilePendingBootstrapRequestsAsync()</span><br>
+        └─ <span class="step">CentralDbSyncInfrastructureExtensions</span><span class="dim"> — DI registration</span>
+      </div>
+      <br>
+      <span class="step" style="font-size:15px;font-weight:600">Database (PostgreSQL)</span><br>
+      <div style="padding-left:16px">
+        └─ <span class="table-ref">sync_meta.bootstrap_request</span><span class="dim"> — durable work ticket</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>5.2 Dependency Injection</h3>
+    <pre><span class="c">// Infrastructure/CentralDbSync/CentralDbSyncInfrastructureExtensions.cs:38-44</span>
+<span class="c">// Request store — Dapper + Npgsql</span>
+services.<span class="f">AddScoped</span>&lt;IBootstrapRequestStore&gt;(sp =&gt;
+    <span class="k">new</span> <span class="f">PostgresBootstrapRequestStore</span>(centralDbConnection));
+
+<span class="c">// Job scheduler — Hangfire</span>
+services.<span class="f">AddScoped</span>&lt;IBootstrapJobScheduler, HangfireBootstrapJobScheduler&gt;();
+
+<span class="c">// Application services</span>
+services.<span class="f">AddScoped</span>&lt;BootstrapSyncService&gt;();
+services.<span class="f">AddScoped</span>&lt;BootstrapRequestService&gt;();</pre>
+    <p class="note" style="margin-top:8px">📍 <code>Infrastructure/CentralDbSync/CentralDbSyncInfrastructureExtensions.cs:38-44</code></p>
+  </div>
+
+  <h2 class="section">VI. Race Conditions & Fixes</h2>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge danger">Critical</span>
+      <h3 style="margin:0">Race 1: Concurrent CreateOrGetActiveAsync</h3>
+    </div>
+
+    <div class="callout danger">
+      <b>Vấn đề:</b> Hai session gần như đồng thời gọi <code>CreateOrGetActiveAsync</code> cho cùng source_table.<br>
+      Cả hai SELECT đều không tìm thấy active request → cả hai đều INSERT. Session thứ 2 gặp <code>ON CONFLICT</code>.
+      Code cũ dùng <code>ExecuteAsync</code> trả về row count (luôn &gt; 0 cho cả INSERT và ON CONFLICT DO UPDATE),
+      nên session thứ 2 tưởng rằng INSERT thành công và trả về requestId của chính nó — nhưng request đó
+      không tồn tại trong DB (phantom ID). Caller enqueue Hangfire job cho request không tồn tại → silent data loss.
+    </div>
+
+    <p><b>Fix:</b> Dùng <code>QuerySingleAsync&lt;Guid&gt;</code> đọc giá trị thực từ <code>RETURNING request_id</code>. So sánh với requestId đã generate — nếu khác nhau tức là conflict, fetch existing row.</p>
+    <pre><span class="c">// Infrastructure/CentralDbSync/PostgresBootstrapRequestStore.cs:48-97</span>
+<span class="c">// Trước (sai):</span>
+<span class="err">var inserted = await conn.ExecuteAsync(sql);</span>
+<span class="err">if (inserted &gt; 0)  // ← luôn true, kể cả conflict!</span>
+
+<span class="c">// Sau (đúng):</span>
+<span class="good">var actualRequestId = await conn.QuerySingleAsync&lt;Guid&gt;(sql);</span>
+<span class="good">if (actualRequestId == requestId)</span>
+<span class="good">{</span>
+<span class="good">    // We inserted a new row</span>
+<span class="good">    return new BootstrapRequestResult(created, true);</span>
+<span class="good">}</span>
+<span class="good">// Conflict: fetch existing row by actualRequestId</span></pre>
+    <p class="note" style="margin-top:8px">📍 <code>Infrastructure/CentralDbSync/PostgresBootstrapRequestStore.cs:48-97</code></p>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge danger">Critical</span>
+      <h3 style="margin:0">Race 2: Job chạy trước MarkQueuedAsync</h3>
+    </div>
+
+    <div class="callout danger">
+      <b>Vấn đề:</b> <code>BootstrapRequestService.SubmitAsync</code> gọi <code>scheduler.EnqueueAsync</code> trước <code>requestStore.MarkQueuedAsync</code>.
+      Hangfire có thể thực thi <code>RunBootstrapAsync</code> ngay lập tức. Job gọi <code>TryMarkRunningAsync</code>
+      — nhưng request đang ở <code>pending_enqueue</code>, và code cũ chỉ chấp nhận <code>queued</code>/<code>waiting_for_lock</code>.
+      Job silent exit. Sau đó <code>MarkQueuedAsync</code> set status thành <code>queued</code>. Request stuck ở <code>queued</code>
+      vì reconciliation chỉ quét <code>pending_enqueue</code>, và không còn scheduled job nào để process nó.
+    </div>
+
+    <p><b>Fix:</b> Mở rộng <code>TryMarkRunningAsync</code> để chấp nhận <code>pending_enqueue</code> trong status filter.</p>
+    <pre><span class="c">// Trước:</span>
+<span class="err">AND status IN ('queued', 'waiting_for_lock')</span>
+
+<span class="c">// Sau:</span>
+<span class="good">AND status IN ('pending_enqueue', 'queued', 'waiting_for_lock')</span></pre>
+    <p class="note" style="margin-top:8px">📍 <code>Infrastructure/CentralDbSync/PostgresBootstrapRequestStore.cs:153</code></p>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge warn">Important</span>
+      <h3 style="margin:0">Race 3: MarkQueuedAsync không chấp nhận waiting_for_lock</h3>
+    </div>
+
+    <div class="callout">
+      <b>Vấn đề:</b> Trong <code>SkippedLocked</code> path: <code>MarkWaitingForLockAsync</code> (→ <code>waiting_for_lock</code>) → <code>ScheduleAsync</code> → <code>MarkQueuedAsync</code>. Code cũ chỉ cho phép <code>MarkQueuedAsync</code> từ <code>pending_enqueue</code>, nên fails vì request đang ở <code>waiting_for_lock</code>. Hậu quả: job ID mới không được persist, API show stale <code>hangfireJobId</code> và status <code>waiting_for_lock</code>.
+    </div>
+
+    <p><b>Fix:</b> Mở rộng <code>MarkQueuedAsync</code> để chấp nhận cả <code>pending_enqueue</code> và <code>waiting_for_lock</code>.</p>
+    <pre><span class="c">// Trước:</span>
+<span class="err">AND status = 'pending_enqueue'</span>
+
+<span class="c">// Sau:</span>
+<span class="good">AND status IN ('pending_enqueue', 'waiting_for_lock')</span></pre>
+    <p class="note" style="margin-top:8px">📍 <code>Infrastructure/CentralDbSync/PostgresBootstrapRequestStore.cs:135</code></p>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge good">Đã fix</span>
+      <h3 style="margin:0">Design: Bootstrap error không thay đổi checkpoint</h3>
+    </div>
+
+    <div class="callout key">
+      <b>Design decision:</b> Khi bootstrap thất bại, checkpoint phải <b>không đổi</b>. Chỉ run log và request status phản ánh failure. Operator có thể retry từ cùng checkpoint.
+    </div>
+
+    <p><b>Fix:</b> Xoá <code>TransitionToFullResyncAsync</code> khỏi catch block của <code>BootstrapSyncService.ExecuteCoreAsync</code>.</p>
+    <pre><span class="c">// Application/Features/CentralDbSync/Services/BootstrapSyncService.cs:119-136</span>
+<span class="c">// Đã xoá:</span>
+<span class="err">await checkpointStore.TransitionToFullResyncAsync(</span>
+<span class="err">    config.SourceTable, "BootstrapFailed", ex.Message, ...);</span>
+
+<span class="c">// Giờ chỉ log failure, checkpoint không đổi</span>
+<span class="good">await runLog.WriteAsync(CreateFailedEntry(...));</span>
+<span class="good">return new SyncRunResult { Outcome = Failed, ErrorCode = "BootstrapFailed" };</span></pre>
+    <p class="note" style="margin-top:8px">📍 <code>Application/Features/CentralDbSync/Services/BootstrapSyncService.cs:119-136</code></p>
+  </div>
+
+  <h2 class="section">VII. BootstrapSyncService Flow Detail</h2>
+
+  <div class="card">
+    <h3>7.1 ExecuteAsync — Bootstrap Execution</h3>
+    <div class="flow-box">
+      <span class="step">BootstrapSyncService.ExecuteAsync</span><br>
+      <div style="padding-left:16px;margin-top:4px">
+        ├─ 1. <span class="step">syncLock.TryAcquireAsync</span> — advisory lock per table<br>
+        │  ├─ <span class="warn">[null]</span> → log SkippedLocked, return<br>
+        │  └─ <span class="good">[handle]</span> → proceed<br>
+        ├─ 2. <span class="step">reader.ReadAsync</span> — snapshot + CHANGE_TRACKING_CURRENT_VERSION<br>
+        │  └─ <span class="err">[Exception]</span> → catch → log → return Failed<br>
+        ├─ 3. <span class="step">applier.ApplyBootstrapAsync</span> — upsert + deactivate + set checkpoint<br>
+        │  └─ <span class="err">[Exception]</span> → catch → log (checkpoint NOT modified) → return Failed<br>
+        └─ 4. <span class="step">runLog.WriteAsync</span> — ghi audit log success<br>
+           └─ return Succeeded
+      </div>
+    </div>
+    <pre><span class="c">// Application/Features/CentralDbSync/Services/BootstrapSyncService.cs:24-57</span>
+<span class="k">public async</span> Task&lt;SyncRunResult&gt; <span class="f">ExecuteAsync</span>(
+    TableSyncConfig config, Guid runId, CancellationToken ct)
+{
+    <span class="k">await using</span> var lockHandle = <span class="k">await</span> <span class="f">syncLock</span>.<span class="f">TryAcquireAsync</span>(config.SourceTable, ct);
+    <span class="k">if</span> (lockHandle <span class="k">is null</span>)
+    {
+        <span class="k">await</span> <span class="f">runLog</span>.<span class="f">WriteAsync</span>(SkippedLocked entry);
+        <span class="k">return</span> new SyncRunResult { Outcome = SkippedLocked };
+    }
+    <span class="k">return await</span> <span class="f">ExecuteCoreAsync</span>(config, runId, startedAt, ct);
+}</pre>
+    <p class="note" style="margin-top:8px">📍 <code>Application/Features/CentralDbSync/Services/BootstrapSyncService.cs:24-57</code></p>
+  </div>
+
+  <div class="card">
+    <h3>7.2 Throw-caught Transaction Flow</h3>
+    <div class="flow-box">
+      <span class="step">SubmitAsync</span><br>
+      <div style="padding-left:16px;margin-top:4px">
+        ├─ <span class="f">CreateOrGetActiveAsync</span><br>
+        │  ├─ <span class="good">[Mới]</span> → enqueue + mark queued → return<br>
+        │  └─ <span class="dim">[Existing]</span> → return existing (no enqueue)<br>
+        └─ <span class="err">[Exception]</span><br>
+           └─ <span class="f">MarkFailedAsync</span> (code = BootstrapEnqueueFailed) → rethrow
+      </div>
+      <br>
+      <span class="step">RunBootstrapAsync</span><br>
+      <div style="padding-left:16px;margin-top:4px">
+        ├─ <span class="f">TryMarkRunningAsync</span><br>
+        │  ├─ <span class="good">[Claimed]</span> → execute bootstrap<br>
+        │  └─ <span class="warn">[Not claimed]</span> → warning, exit<br>
+        ├─ <span class="f">BootstrapSyncService.ExecuteAsync</span><br>
+        │  ├─ <span class="good">[Succeeded]</span> → MarkCompletedAsync<br>
+        │  ├─ <span class="warn">[SkippedLocked]</span> → MarkWaitingForLock → Schedule(1m) → MarkQueued<br>
+        │  └─ <span class="err">[Failed]</span> → MarkFailedAsync<br>
+        └─ <span class="dim">(retry handling: AutomaticRetry(Attempts=0) — internal retry via Schedule)</span>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="section">VIII. Recurring Reconciliation</h2>
+
+  <div class="card">
+    <h3>8.1 ReconcilePendingBootstrapRequestsAsync</h3>
+    <p>Chạy mỗi 5 phút (Cron.MinuteInterval(5)). Xử lý request bị orphan — crash sau INSERT trước EnqueueAsync.</p>
+    <div class="flow-box">
+      <span class="step">ReconcilePendingBootstrapRequestsAsync</span><br>
+      <div style="padding-left:16px;margin-top:4px">
+        ├─ <span class="f">GetPendingEnqueueBeforeAsync</span>(cutoff = now - 5 phút)<br>
+        │  └─ <span class="dim">Query: status = 'pending_enqueue' AND requested_at ≤ cutoff</span><br>
+        └─ <span class="k">foreach</span> stale request<br>
+           ├─ <span class="f">scheduler.ScheduleAsync</span>(delay=0) → Hangfire enqueue<br>
+           ├─ <span class="f">MarkQueuedAsync</span> → queued<br>
+           └─ <span class="err">[Exception]</span> → MarkFailedAsync(ReconciliationFailed)
+      </div>
+    </div>
+    <pre><span class="c">// Application/Features/CentralDbSync/Services/BootstrapRequestService.cs:78-111</span>
+<span class="k">public async</span> Task <span class="f">ReconcilePendingAsync</span>(DateTime cutoff, CancellationToken ct)
+{
+    var stale = <span class="k">await</span> <span class="f">requestStore</span>.<span class="f">GetPendingEnqueueBeforeAsync</span>(cutoff, ct);
+
+    <span class="k">foreach</span> (var request <span class="k">in</span> stale)
+    {
+        <span class="k">try</span>
+        {
+            var hangfireJobId = <span class="k">await</span> <span class="f">scheduler</span>.<span class="f">ScheduleAsync</span>(..., TimeSpan.Zero, ct);
+            <span class="k">await</span> <span class="f">requestStore</span>.<span class="f">MarkQueuedAsync</span>(request.RequestId, hangfireJobId, ct);
+        }
+        <span class="k">catch</span> (Exception ex)
+        {
+            <span class="k">await</span> <span class="f">requestStore</span>.<span class="f">MarkFailedAsync</span>(..., <span class="s">"ReconciliationFailed"</span>, ...);
+        }
+    }
+}</pre>
+    <p class="note" style="margin-top:8px">📍 <code>Application/Features/CentralDbSync/Services/BootstrapRequestService.cs:78-111</code></p>
+  </div>
+
+  <h2 class="section">IX. PostgresBootstrapRequestStore — SQL Details</h2>
+
+  <div class="card">
+    <h3>9.1 CreateOrGetActiveAsync — INSERT + ON CONFLICT Guard</h3>
+    <pre><span class="c">-- Infrastructure/CentralDbSync/PostgresBootstrapRequestStore.cs:48-59</span>
+<span class="k">INSERT INTO</span> <span class="table-ref">sync_meta.bootstrap_request</span>
+    (request_id, source_table, status, rows_staged, total_rows_expected,
+     attempt_count, requested_at, updated_at)
+<span class="k">VALUES</span>
+    (@RequestId, @SourceTable, 'pending_enqueue', 0, NULL, 0, @Now, @Now)
+<span class="k">ON CONFLICT</span> (source_table)
+    <span class="k">WHERE</span> status IN ('pending_enqueue','queued','running','waiting_for_lock')
+<span class="k">DO UPDATE SET</span> updated_at = EXCLUDED.updated_at
+<span class="k">RETURNING</span> request_id</pre>
+    <div class="callout key">
+      <b>RETURNING request_id</b> trả về ID thực tế trong DB (của row mới hoặc existing). So sánh với requestId đã generate để phân biệt INSERT thành công vs CONFLICT.
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>9.2 TryMarkRunningAsync — Atomic Claim</h3>
+    <pre><span class="c">-- Infrastructure/CentralDbSync/PostgresBootstrapRequestStore.cs:147-156</span>
+<span class="k">UPDATE</span> <span class="table-ref">sync_meta.bootstrap_request</span>
+<span class="k">SET</span> status = 'running',
+    started_at = COALESCE(started_at, NOW()),
+    attempt_count = attempt_count + 1,
+    updated_at = NOW()
+<span class="k">WHERE</span> request_id = @RequestId
+  <span class="k">AND</span> status IN (<span class="s">'pending_enqueue'</span>, <span class="s">'queued'</span>, <span class="s">'waiting_for_lock'</span>)</pre>
+    <div class="callout">
+      <b>attempt_count</b> tăng mỗi lần claim — kể cả khi lock busy (SkippedLocked → waiting_for_lock → reschedule → claim lại). Cho phép operator thấy số lần retry.
+    </div>
+  </div>
+
+  <h2 class="section">X. Source Map</h2>
+
+  <div class="card">
+    <ul class="files-list">
+      <li><code>Application/Features/CentralDbSync/Abstractions/IBootstrapRequestStore.cs</code> — Contract cho request store (7 methods)</li>
+      <li><code>Application/Features/CentralDbSync/Abstractions/IBootstrapJobScheduler.cs</code> — Contract cho job scheduler (Enqueue + Schedule)</li>
+      <li><code>Application/Features/CentralDbSync/Models/BootstrapRequest.cs</code> — Domain model + status constants</li>
+      <li><code>Application/Features/CentralDbSync/Models/BootstrapRequestResult.cs</code> — Result DTO (Request + IsNewRequest)</li>
+      <li><code>Application/Features/CentralDbSync/Services/BootstrapRequestService.cs</code> — Orchestration: submit, get status, reconcile</li>
+      <li><code>Application/Features/CentralDbSync/Services/BootstrapSyncService.cs</code> — Bootstrap execution engine</li>
+      <li><code>Infrastructure/CentralDbSync/PostgresBootstrapRequestStore.cs</code> — PostgreSQL implementation via Dapper + Npgsql</li>
+      <li><code>Infrastructure/CentralDbSync/HangfireBootstrapJobScheduler.cs</code> — Hangfire scheduling implementation</li>
+      <li><code>Infrastructure/CentralDbSync/CentralDbSyncJobs.cs</code> — Hangfire job entry point (RunBootstrapAsync + ReconcilePending)</li>
+      <li><code>Infrastructure/CentralDbSync/CentralDbSyncInfrastructureExtensions.cs</code> — DI registration</li>
+      <li><code>Infrastructure/Database/SqlScript/CentralDbSync/001-central-db-sync-schema.sql</code> — DDL (idempotent)</li>
+      <li><code>WebApi/Controllers/CentralDbSyncController.cs</code> — REST API endpoints</li>
+      <li><code>WebApi/Program.cs</code> — Recurring job registration + Hangfire dashboard</li>
+      <li><code>Tests/Ua.Application.UnitTests/CentralDbSync/BootstrapRequestServiceTests.cs</code> — Unit tests cho service</li>
+      <li><code>Tests/Ua.Application.UnitTests/CentralDbSync/BootstrapSyncServiceTests.cs</code> — Unit tests cho execution</li>
+      <li><code>Tests/Ua.Application.UnitTests/CentralDbSync/CentralDbSyncControllerTests.cs</code> — Unit tests cho controller</li>
+      <li><code>Tests/Ua.Application.UnitTests/CentralDbSync/PostgresIntegrationTests.cs</code> — Integration tests (cần DB connection)</li>
+    </ul>
+  </div>
+
+  <footer class="page">
+    <b>CORE-MOBILE-APP-Reporting — Central DB Sync · Background Bootstrap Phase 1</b><br>
+    sync_meta.bootstrap_request · 2026-07-20<br>
+    <span style="font-size:12px">Last updated: 2026-07-20</span>
+  </footer>
+</div>
+</body>
+</html>

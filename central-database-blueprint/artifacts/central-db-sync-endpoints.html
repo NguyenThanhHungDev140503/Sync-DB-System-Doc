@@ -1,0 +1,1022 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Central DB Sync — Endpoint & Service Analysis</title>
+<style>
+  :root {
+    --bg: #0f1420;
+    --panel: #161d2d;
+    --panel-2: #1c2637;
+    --ink: #e8edf6;
+    --muted: #93a1b8;
+    --border: #2a3550;
+    --erp: #ff8a5c;
+    --erp-bg: #2a1c15;
+    --sql: #5cc8ff;
+    --sql-bg: #12222e;
+    --pg: #a98bff;
+    --pg-bg: #211b35;
+    --job: #ffd166;
+    --job-bg: #2c2616;
+    --good: #52d99a;
+    --good-bg: #12251c;
+    --warn: #ffd166;
+    --danger: #ff6b6b;
+    --danger-bg: #2a1515;
+    --code-bg: #0b0f18;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: linear-gradient(180deg, #0d1119 0%, #0f1420 100%);
+    color: var(--ink);
+    font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.5;
+    padding: 32px 20px 80px;
+  }
+  .wrap { max-width: 1140px; margin: 0 auto; }
+  header.page { border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 28px; }
+  h1 { font-size: 25px; margin: 0 0 6px; letter-spacing: .2px; }
+  .sub { color: var(--muted); font-size: 14px; }
+  .path {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px; color: var(--pg); background: var(--code-bg);
+    padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border);
+  }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 22px 0 34px; font-size: 13px; }
+  .legend .item { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 13px; height: 13px; border-radius: 4px; flex: none; }
+  .dot.http { background: #52d99a; }
+  .dot.internal { background: #ffd166; }
+  .dot.sql { background: #5cc8ff; }
+  .dot.pg { background: #a98bff; }
+  .dot.erp { background: #ff8a5c; }
+  h2.section { font-size: 18px; margin: 40px 0 16px; padding-left: 12px; border-left: 4px solid var(--pg); }
+  .ep-card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px; margin-bottom: 24px; position: relative; overflow: hidden; }
+  .ep-card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; }
+  .ep-card.http::before { background: #52d99a; }
+  .ep-card.internal::before { background: #ffd166; }
+  .ep-card.sql::before { background: #5cc8ff; }
+  .ep-card.pg::before { background: #a98bff; }
+  .ep-card.erp::before { background: #ff8a5c; }
+  .ep-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+  .badge { font-size: 11px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; padding: 3px 9px; border-radius: 20px; border: 1px solid transparent; }
+  .badge.http { color: #52d99a; background: #12251c; border-color: #1e4335; }
+  .badge.internal { color: var(--warn); background: var(--job-bg); border-color: #4c4224; }
+  .badge.sql { color: var(--sql); background: var(--sql-bg); border-color: #1d3a4a; }
+  .badge.pg { color: var(--pg); background: var(--pg-bg); border-color: #40335f; }
+  .badge.erp { color: var(--erp); background: var(--erp-bg); border-color: #4a2f22; }
+  .ep-head .method { font-family: ui-monospace, monospace; font-size: 13px; font-weight: 700; padding: 3px 9px; border-radius: 6px; background: var(--code-bg); border: 1px solid var(--border); }
+  .ep-head .method.get { color: #52d99a; }
+  .ep-head .method.post { color: var(--warn); }
+  .ep-head .method.hangfire { color: var(--sql); }
+  .ep-head .route { font-family: ui-monospace, monospace; font-size: 13px; color: #cdd7e8; }
+  .ep-card h3 { margin: 0; font-size: 16px; font-weight: 650; }
+  .ep-card h4 { margin: 16px 0 6px; font-size: 14px; color: #cdd7e8; }
+  .ep-card p { margin: 6px 0 0; color: #cdd7e8; font-size: 14px; }
+  .ep-card p.note { color: var(--muted); font-size: 13px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; overflow-x: auto; margin: 10px 0 0; font-size: 12px; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; line-height: 1.55; color: #d7e0f0; }
+  pre .k { color: #ff9ecd; }
+  pre .f { color: #8ad6ff; }
+  pre .c { color: #6b7a92; font-style: italic; }
+  pre .s { color: #b7e18a; }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 800px) { .split { grid-template-columns: 1fr; } body { padding: 22px 12px 56px; } }
+  .callout { background: var(--panel-2); border: 1px solid var(--border); border-left: 4px solid var(--warn); border-radius: 8px; padding: 10px 14px; font-size: 13px; color: #d7e0f0; margin-top: 10px; }
+  .callout b { color: var(--warn); }
+  .callout.key { border-left-color: var(--good); }
+  .callout.key b { color: var(--good); }
+  .callout.danger { border-left-color: var(--danger); }
+  .callout.danger b { color: var(--danger); }
+  .callout.pg { border-left-color: var(--pg); }
+  .callout.pg b { color: var(--pg); }
+  .callout.sql { border-left-color: var(--sql); }
+  .callout.sql b { color: var(--sql); }
+  .callout.erp { border-left-color: var(--erp); }
+  .callout.erp b { color: var(--erp); }
+  .tag { display: inline-block; font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; margin-left: 4px; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 0; font-size: 13px; }
+  table th, table td { text-align: left; padding: 7px 10px; border: 1px solid var(--border); }
+  table th { background: var(--panel-2); color: #9aadcc; font-weight: 600; }
+  table td { color: #cdd7e8; }
+  code.hl { color: #8ad6ff; }
+  .deps { margin: 10px 0 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
+  .deps li { font-size: 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; color: #b9c6dd; }
+  footer.page { margin-top: 46px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="page">
+    <h1>Central DB Sync — Endpoint &amp; Service Analysis</h1>
+    <div class="sub"><code class="path">Phase 1 Pilot — CRM.Partners</code> · Phân tích chi tiết từng API endpoint, service và cách chúng tương tác trong hệ thống</div>
+  </header>
+
+  <div class="legend">
+    <div class="item"><span class="dot http"></span> HTTP endpoint (public API)</div>
+    <div class="item"><span class="dot internal"></span> Internal service (DI)</div>
+    <div class="item"><span class="dot sql"></span> MSSQL reader</div>
+    <div class="item"><span class="dot pg"></span> PostgreSQL writer / store</div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">I. HTTP Endpoints (Public API)</h2>
+  <!-- ================================================================ -->
+
+  <!-- 1. GET status (checkpoint lag) -->
+  <div class="ep-card http">
+    <div class="ep-head">
+      <span class="method get">GET</span>
+      <span class="route">/api/central-db-sync/{sourceTable}/status</span>
+      <span class="badge http">HTTP endpoint</span>
+    </div>
+    <h3>Kiểm tra checkpoint freshness / sync lag của một table</h3>
+
+    <div class="split" style="margin-top:10px">
+      <div>
+        <p><b>Mục đích:</b> Cho phép monitoring (Base44, Retool) kiểm tra trạng thái sync engine mà không cần query trực tiếp PostgreSQL <code>sync_meta.checkpoint</code>.</p>
+        <p style="margin-top:8px"><b>Query parameters:</b></p>
+        <table>
+          <tr><th>Param</th><th>Type</th><th>Default</th><th>Mô tả</th></tr>
+          <tr><td><code>maxAllowedLagMinutes</code></td><td>int</td><td>5</td><td>Khoảng thời gian tối đa từ lần sync cuối. Nếu vượt quá → Degraded.</td></tr>
+        </table>
+        <p style="margin-top:8px"><b>Response status:</b></p>
+        <table>
+          <tr><th>HTTP</th><th>status</th><th>syncStatus</th><th>Giải thích</th></tr>
+          <tr><td>200</td><td><code>0</code> (Healthy)</td><td><code>ready</code></td><td>Sync hoạt động tốt, lag &lt; maxAllowedLag</td></tr>
+          <tr><td>200</td><td><code>1</code> (Degraded)</td><td><code>requires_full_resync</code> hay failure_count &gt; 0, hoặc lag &gt; maxAllowedLag</td><td>Cần xử lý — xem <code>lastErrorCode</code></td></tr>
+          <tr><td>404</td><td><code>2</code> (Unknown)</td><td><code>null</code></td><td>Table không tồn tại hoặc chưa được seed trong <code>sync_meta.checkpoint</code></td></tr>
+        </table>
+        <div class="callout danger" style="margin-top:10px"><b>Degraded</b> là trạng thái warning — checkpoint lag vượt ngưỡng hoặc có lỗi, cần xem xét. HTTP vẫn 200 OK (system online) nhưng <code>status = 1</code>.</div>
+        <p style="margin-top:8px"><b>Degraded trả về khi 1 trong các điều kiện sau đúng (kiểm tra theo thứ tự):</b></p>
+        <table>
+          <tr><th>Điều kiện</th><th>Nguyên nhân</th><th>Hành động</th></tr>
+          <tr><td><code>syncStatus = requires_full_resync</code></td><td>Sync trước failed, checkpoint đánh dấu cần bootstrap lại</td><td><code>POST /bootstrap/{table}</code> để force resync</td></tr>
+          <tr><td><code>consecutiveFailureCount &gt; 0</code><br>(dù syncStatus vẫn <code>ready</code>)</td><td>Có ít nhất 1 lần sync failed gần đây (network timeout, lock contention, transient lỗi)</td><td>Check <code>sync_meta.sync_run_log</code> để trace error_code/message<br>Thường tự hồi phục ở cycle sau</td></tr>
+          <tr><td><code>now - lastSuccessAt &gt; maxAllowedLagMinutes</code><br>(default 5 phút)</td><td>Sync không chạy hoặc bị trễ quá lâu — Hangfire job có thể đã dừng, hoặc DB connection down</td><td>Kiểm tra Hangfire dashboard, network kết nối tới MSSQL/PostgreSQL</td></tr>
+        </table>
+        <div class="callout" style="margin-top:10px"><b>Lưu ý:</b> Endpoint này <b>không</b> kiểm tra Change Tracking trên MSSQL — nó chỉ đọc <code>sync_meta.checkpoint</code> để đo checkpoint freshness. CT health cần kiểm tra riêng qua MSSQL <code>sys.change_tracking_tables</code>.</div>
+      </div>
+      <div>
+        <p><b>Logic xử lý (<code>CentralDbSyncStatusService</code>):</b></p>
+        <pre><span class="k">GetStatusAsync</span>(sourceTable, maxAllowedLag):
+  checkpoint = <span class="f">ISyncCheckpointStore.GetAsync</span>(sourceTable)
+  <span class="k">if</span> (checkpoint == null) → Unknown
+  <span class="k">if</span> (checkpoint.SyncStatus == <span class="s">"pending_initial_sync"</span>) → Unknown
+  <span class="k">if</span> (checkpoint.SyncStatus == <span class="s">"requires_full_resync"</span>
+      || checkpoint.ConsecutiveFailureCount &gt; 0) → Degraded
+  <span class="k">if</span> (now - lastSuccessAt &gt; maxAllowedLag) → Degraded
+  → Healthy</pre>
+        <p class="note" style="margin-top:6px"><code>pending_initial_sync</code> trả về Unknown vì chưa có sync nào — hệ thống đang chờ bootstrap lần đầu.</p>
+      </div>
+    </div>
+
+    <div class="callout sql"><b>Dependencies:</b> <code>ISyncCheckpointStore</code> → <code>PostgresSyncCheckpointStore</code> (đọc <code>sync_meta.checkpoint</code>).</div>
+    <div class="callout key"><b>Ví dụ response:</b></div>
+    <pre>HTTP 200
+{
+  "sourceTable": "CRM.Partners",
+  "status": 0,
+  "state": {
+    "sourceTable": "CRM.Partners",
+    "lastSyncVersion": 0,
+    "syncStatus": "ready",
+    "lastSuccessAt": "2026-07-19T09:57:06.446412Z",
+    "consecutiveFailureCount": 0
+  }
+}</pre>
+  </div>
+
+  <!-- 2. POST bootstrap -->
+  <div class="ep-card http">
+    <div class="ep-head">
+      <span class="method post">POST</span>
+      <span class="route">/api/central-db-sync/bootstrap/{sourceTable}</span>
+      <span class="badge http">HTTP endpoint</span>
+    </div>
+    <h3>Kích hoạt bootstrap (full sync) thủ công</h3>
+
+    <div class="callout key" style="margin-bottom:12px">
+    <b style="color:var(--warn)">⚠️ Thuật ngữ "snapshot" trong tài liệu này chỉ "bản sao dữ liệu tại một thời điểm", hoàn toàn KHÔNG liên quan đến SQL Server Snapshot Isolation. Hệ thống dùng <code>ReadCommitted + READPAST + CT version verify</code> — không cần bật Snapshot Isolation trên database.</b><br><br>
+    <b>Bootstrap là gì?</b> Bootstrap (full sync) là quá trình <b>đọc toàn bộ dữ liệu hiện tại</b> từ MSSQL source table và <b>ghi đè</b> lên PostgreSQL target table. Không giống CT incremental sync (chỉ sync thay đổi), bootstrap xóa sạch trạng thái cũ và xây dựng lại từ đầu.<br><br>
+    <b>Dùng để làm gì?</b><br>
+    • 🆕 <b>Khởi tạo lần đầu:</b> Khi một table lần đầu được đưa vào sync engine lần đầu, không có dữ liệu nào trên PostgreSQL và checkpoint null. CT incremental sync <b>không thể</b> tự tạo dữ liệu từ đầu vì nó chỉ đọc thay đổi dựa trên version — không có version cũ nào để so sánh. Bootstrap là cách duy nhất để: (a) có một bản sao dữ liệu đầy đủ làm baseline, (b) ghi checkpoint version đầu tiên, (c) từ đó CT incremental mới có điểm xuất phát để chạy.<br>
+    • 🔄 <b>Recovery sau lỗi:</b> Khi CT incremental sync bị lỗi nghiêm trọng (checkpoint invalid, retention cleanup), hệ thống tự động chuyển sang bootstrap để đồng bộ lại từ đầu.<br>
+    • 🛠️ <b>Can thiệp thủ công:</b> Admin gọi <code>POST /bootstrap</code> khi cần force resync (sửa data corruption, sync bị trễ quá lâu, thay đổi mapping).<br><br>
+    <b>Cơ chế:</b> Đọc CT version làm baseline → full table scan với READPAST → verify không có concurrent DML (so sánh CT version trước/sau) → upsert tất cả vào PostgreSQL trong 1 transaction → set checkpoint. Toàn bộ dữ liệu cũ bị deactivate nếu không còn trong lần chạy bootstrap hiện tại.<br><br>
+    <b>Nếu không chạy bootstrap thì CT có chạy được không?</b> <b>Không.</b> CT incremental sync phụ thuộc hoàn toàn vào checkpoint để hoạt động. Khi chưa bootstrap: (1) checkpoint null hoặc <code>pending_initial_sync</code> → CT service kiểm tra và trả về <code>RequiresFullResync</code> ngay, (2) PostgreSQL chưa có row nào → <code>CHANGETABLE</code> chỉ trả về <code>partner_id</code> không đủ để upsert, (3) <code>SyncOrchestrator</code> tự động route sang bootstrap khi thấy checkpoint chưa ready. Bootstrap là <b>bắt buộc</b> để tạo baseline dữ liệu và checkpoint trước khi CT có thể chạy.</div>
+
+    <div class="split" style="margin-top:10px">
+      <div>
+        <p><b>Mục đích:</b> Cho phép admin kích hoạt full re-sync khi cần (sửa lỗi dữ liệu, recovery sau downtime dài).</p>
+        <p style="margin-top:8px"><b>Request flow:</b></p>
+        <table>
+          <tr><th>Bước</th><th>Logic</th><th>Response nếu fail</th></tr>
+          <tr><td>1</td><td>Check Admin role (hiện tạm bỏ)</td><td>403 Forbidden</td></tr>
+          <tr><td>2</td><td>Check table có trong <code>RegisteredTables</code></td><td>400 BadRequest</td></tr>
+          <tr><td>3</td><td>Gọi <code>BootstrapSyncService.ExecuteAsync()</code></td><td>—</td></tr>
+          <tr><td>4</td><td>Nếu lock không acquire được</td><td>409 Conflict + <code>outcome: skipped_locked</code></td></tr>
+          <tr><td>5</td><td>Thành công</td><td>202 Accepted + rowsRead, rowsUpserted, checkpointAfter</td></tr>
+        </table>
+      </div>
+      <div>
+        <p><b>Auth guard — design note:</b></p>
+        <div class="callout danger" style="margin-top:0"><b>Hiện tại DISABLED.</b> Xem <code>docs/notes/2026-07-19-admin-role-bypass.md</code>. Cần re-enable trước UAT.</div>
+        <p><b>Table validation:</b></p>
+        <div class="callout sql"><b>Endpoint chỉ chấp nhận</b> <code>CRM.Partners</code>. Các table alias (dbo.CRM.Partners, CRM.Partners.CRM.Partners, v.v.) đều bị reject vì checkpoint key phải match <code>sync_meta.table_sync_config.source_table</code>.</div>
+      </div>
+    </div>
+
+    <h4>BootstrapSyncService.ExecuteAsync() — Chi tiết luồng:</h4>
+    <div class="split">
+      <div>
+        <div class="callout" style="margin-top:0"><b>1. Acquire lock</b><br><code>ITableSyncLock.TryAcquireAsync()</code> → PostgreSQL <code>pg_try_advisory_lock()</code>. Nếu lock bận → <code>SkippedLocked</code>.</div>
+        <div class="callout sql"><b>2. Đọc toàn bộ dữ liệu từ MSSQL</b><br><code>IBootstrapSnapshotReader.ReadAsync()</code> → <code>SqlServerPartnersReader</code>: Capture CT version + full table scan với READPAST + verify version (retry 3 lần).</div>
+      </div>
+      <div>
+        <div class="callout pg"><b>3. Apply to PostgreSQL</b><br><code>ISyncBatchApplier.ApplyBootstrapAsync()</code> → <code>PostgresPartnersWriter</code>: 1 transaction upsert tất cả rows + deactivate orphan + set checkpoint → <code>ready</code>.</div>
+        <div class="callout"><b>4. Log + release lock</b><br><code>ISyncRunLog.WriteAsync()</code> → <code>sync_meta.sync_run_log</code> + connection disposed → lock tự release.</div>
+      </div>
+    </div>
+
+    <div class="callout key"><b>Response examples:</b></div>
+    <pre><span class="c">-- 202 Accepted (thành công)</span>
+HTTP 202
+{ "message": "Bootstrap initiated for CRM.Partners.",
+  "outcome": "succeeded", "rowsRead": 348,
+  "rowsUpserted": 348, "checkpointAfter": 0 }
+
+<span class="c">-- 409 Conflict (lock held bởi worker khác)</span>
+HTTP 409
+{ "message": "Table CRM.Partners is locked by another sync worker.",
+  "outcome": "skipped_locked" }
+
+<span class="c">-- 400 BadRequest (table không hợp lệ)</span>
+HTTP 400
+{ "message": "Table 'NonExistentTable' is not a registered sync table.
+  Allowed: CRM.Partners", "allowedTables": ["CRM.Partners"] }</pre>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">II. Internal Services</h2>
+  <!-- ================================================================ -->
+
+  <!-- 3. Hangfire Job -->
+  <div class="ep-card internal">
+    <div class="ep-head">
+      <span class="method hangfire">⏱</span>
+      <span class="route">CentralDbSyncJobs.RunPilotAsync()</span>
+      <span class="badge internal">Hangfire RecurringJob</span>
+    </div>
+    <h3>Job định kỳ — mỗi 1 phút</h3>
+
+    <div class="split">
+      <div>
+        <p><b>Mục đích:</b> Là entry point cho sync engine chạy tự động, thay thế cho việc gọi API thủ công.</p>
+        <p style="margin-top:8px"><b>Cách hoạt động:</b></p>
+        <table>
+          <tr><th>Bước</th><th>Mô tả</th></tr>
+          <tr><td>1</td><td>Hangfire trigger — queue <code>data-sync</code></td></tr>
+          <tr><td>2</td><td>Tạo DI scope mới</td></tr>
+          <tr><td>3</td><td>Lấy <code>SyncOrchestrator</code> từ scope</td></tr>
+          <tr><td>4</td><td>Tạo <code>TableSyncConfig</code> cho CRM.Partners</td></tr>
+          <tr><td>5</td><td>Gọi <code>orchestrator.ExecuteAsync([config])</code></td></tr>
+        </table>
+        <p style="margin-top:8px"><b>Đặc điểm:</b></p>
+        <ul style="font-size:13px; color:#cdd7e8; margin:6px 0 0; padding-left:18px;">
+          <li><code>[DisableConcurrentExecution(60s)]</code> — không có 2 instance chạy cùng lúc</li>
+          <li><code>[AutomaticRetry(Attempts = 0)]</code> — retry do service tự xử lý</li>
+          <li>Scope đảm bảo mỗi lần chạy có connection mới</li>
+        </ul>
+      </div>
+      <div>
+        <p><b>Đăng ký trong Program.cs:</b></p>
+        <pre style="margin-top:6px"><span class="c">// Mỗi phút chạy 1 lần</span>
+RecurringJob.AddOrUpdate&lt;CentralDbSyncJobs&gt;(
+    <span class="s">"central-db-sync-pilot"</span>,
+    job => job.RunPilotAsync(CancellationToken.None),
+    Cron.Minutely(),
+    new RecurringJobOptions { QueueName = <span class="s">"data-sync"</span> });</pre>
+        <div class="callout key"><b>Scheduling guard:</b> Period phải lớn hơn p95 runtime. Bootstrap ~731ms, CT ~551ms — an toàn với interval 1 phút.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. SyncOrchestrator -->
+  <div class="ep-card internal">
+    <div class="ep-head">
+      <span class="method hangfire">⏱</span>
+      <span class="route">SyncOrchestrator.ExecuteAsync()</span>
+      <span class="badge internal">Orchestrator</span>
+    </div>
+    <h3>Bộ điều phối sync engine — quyết định bootstrap hay CT sync</h3>
+
+    <div class="split">
+      <div>
+        <p><b>Mục đích:</b> Điều hướng luồng sync dựa trên trạng thái checkpoint. Xử lý dependency giữa các table.</p>
+        <p style="margin-top:8px"><b>Luồng xử lý (per table):</b></p>
+        <pre><span class="k">foreach</span> config <span class="k">in</span> configs:
+  <span class="k">if</span> (!config.Enabled) → <span class="k">continue</span>
+  <span class="k">if</span> (!<span class="f">AreDependenciesReady</span>(config)) → <span class="k">continue</span> (log skipped_dependency)
+  checkpoint = <span class="f">checkpointStore.GetAsync</span>(config.SourceTable)
+
+  <span class="k">if</span> (checkpoint == null
+      || checkpoint.SyncStatus == <span class="s">"pending_initial_sync"</span>
+      || checkpoint.SyncStatus == <span class="s">"requires_full_resync"</span>)
+    → <span class="f">bootstrapService.ExecuteAsync</span>(config)   <span class="c">-- Bootstrap path</span>
+  <span class="k">else</span>
+    → <span class="f">ctService.ExecuteAsync</span>(config)            <span class="c">-- CT Incremental path</span></pre>
+      </div>
+      <div>
+        <p><b>Dependency check:</b></p>
+        <div class="callout key" style="margin-top:0"><b>CRM.Partners:</b> Không có dependency → luôn được xử lý ngay. Khi mở rộng, table khác (ví dụ: <code>partners_addresses</code>) có thể có dependency là <code>CRM.Partners</code>.</div>
+
+        <p style="margin-top:14px"><b>Skipped dependency log:</b></p>
+        <pre style="margin-top:6px">sync_run_log:
+  mode: "Orchestrator"
+  outcome: "skipped_dependency"
+  duration_ms: 0
+  source_table: "TableB"
+  error_message: (dependency TableA not Ready)</pre>
+
+        <div class="callout"><b>Error isolation:</b> Mỗi table xử lý độc lập. TableA fail không block TableB (nếu TableB không phụ thuộc TableA).</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. BootstrapSyncService -->
+  <div class="ep-card sql">
+    <div class="ep-head">
+      <span class="method hangfire">⏱</span>
+      <span class="route">BootstrapSyncService.ExecuteAsync()</span>
+      <span class="badge sql">Full sync service</span>
+    </div>
+    <h3>Full snapshot sync — bootstrap toàn bộ dữ liệu từ MSSQL → PostgreSQL</h3>
+
+    <div class="split">
+      <div>
+        <p><b>Khi nào được gọi?</b></p>
+        <ul style="font-size:13px; color:#cdd7e8; margin:6px 0 0; padding-left:18px;">
+          <li>Endpoint <code>POST /bootstrap</code></li>
+          <li><code>SyncOrchestrator</code> khi checkpoint null / <code>pending_initial_sync</code> / <code>requires_full_resync</code></li>
+          <li>Recovery path: <code>ChangeTrackingSyncService</code> khi checkpoint invalid</li>
+        </ul>
+        <p style="margin-top:10px"><b>Public methods:</b></p>
+        <table>
+          <tr><th>Method</th><th>Mục đích</th></tr>
+          <tr><td><code>ExecuteAsync()</code></td><td>Standard flow: acquire lock → execute core → lock tự release qua <code>await using</code></td></tr>
+          <tr><td><code>ExecuteWithProvidedLockAsync()</code></td><td>CT invalid recovery: execute core với lock đã được acquire trước đó bởi <code>ChangeTrackingSyncService</code></td></tr>
+        </table>
+      </div>
+      <div>
+        <p><b>Chi tiết luồng core:</b></p>
+        <pre style="margin-top:6px"><span class="k">ExecuteCoreAsync</span>(config, startedAt):
+  <span class="k">try</span>
+    snapshot = <span class="f">IBootstrapSnapshotReader.ReadAsync</span>(config)
+       <span class="c">// → CT baseline version + full data</span>
+    result = <span class="f">ISyncBatchApplier.ApplyBootstrapAsync</span>(config, snapshot)
+       <span class="c">// → PostgreSQL 1 transaction: upsert + deactivate + checkpoint</span>
+    <span class="f">ISyncRunLog.WriteAsync</span>(outcome: succeeded, ...)
+    <span class="k">return</span> result
+  <span class="k">catch</span> (OperationCanceledException)
+    → log Cancelled, throw
+  <span class="k">catch</span> (Exception ex)
+    → <span class="f">checkpointStore.TransitionToFullResyncAsync</span>()  <span class="c">-- set status + error metadata</span>
+    → <span class="f">ISyncRunLog.WriteAsync</span>(outcome: failed, errorCode: "BootstrapFailed")
+    <span class="k">return</span> SyncRunResult { Outcome: Failed, ErrorCode: "BootstrapFailed" }</pre>
+        <div class="callout key"><b>Không re-throw exception sau catch.</b> Bootstrap service luôn trả về <code>SyncRunResult</code> — không crash orchestrator.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. ChangeTrackingSyncService -->
+  <div class="ep-card sql">
+    <div class="ep-head">
+      <span class="method hangfire">⏱</span>
+      <span class="route">ChangeTrackingSyncService.ExecuteAsync()</span>
+      <span class="badge sql">CT incremental service</span>
+    </div>
+    <h3>Change Tracking incremental sync — chỉ sync dữ liệu thay đổi từ checkpoint</h3>
+
+    <div class="split">
+      <div>
+        <p><b>Điều kiện chạy:</b></p>
+        <table>
+          <tr><th>Điều kiện</th><th>Kết quả</th></tr>
+          <tr><td>Checkpoint null</td><td>→ <code>RequiresFullResync</code></td></tr>
+          <tr><td>SyncStatus != <code>ready</code></td><td>→ <code>RequiresFullResync</code></td></tr>
+          <tr><td>LastSyncVersion null</td><td>→ <code>RequiresFullResync</code></td></tr>
+          <tr><td>Checkpoint valid + có changes</td><td>→ Read + apply batch</td></tr>
+          <tr><td>Checkpoint valid + không changes</td><td>→ Advance checkpoint, log NoChanges</td></tr>
+        </table>
+
+        <p style="margin-top:10px"><b>Error handling:</b></p>
+        <div class="callout sql" style="margin-top:6px"><b>CheckpointInvalidException:</b> CT retention cleanup → <code>CHECKPOINT_MIN_VALID_VERSION &gt; last_sync_version</code>. Transition → <code>ExecuteWithProvidedLockAsync</code> (bootstrap recovery cùng lock).</div>
+      </div>
+      <div>
+        <p><b>Apply retry logic:</b></p>
+        <pre style="margin-top:6px"><span class="f">ApplyWithRetryAsync</span>(config, batch):
+  <span class="k">for</span> attempt = 1..3:
+    <span class="k">try</span>
+      <span class="k">return</span> <span class="f">ISyncBatchApplier.ApplyBatchAsync</span>(config, batch)
+    <span class="k">catch</span> (transient error) <span class="k">when</span> attempt &lt; 3:
+      <span class="k">await</span> Delay(attempt^2 seconds)  <span class="c">-- 1s, 2s, 4s</span>
+    <span class="k">catch</span> (transient error) <span class="k">when</span> attempt == 3:
+      <span class="k">return</span> SyncRunResult { Outcome: Failed, ErrorCode: "ApplyRetriesExhausted" }
+    <span class="k">catch</span> (non-transient error):
+      <span class="k">return</span> SyncRunResult { Outcome: Failed, ErrorCode: "NonTransientApplyError" }
+
+<span class="c">-- Transient detection:</span>
+IsTransient(): message contains "deadlock" | "timeout" | "connection"</pre>
+
+        <div class="callout key"><b>No-changes optimization:</b> <code>batch.Rows.Count == 0</code> → chỉ advance checkpoint, không cần PostgreSQL data transaction. Giảm tải DB.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">III. Infrastructure Components</h2>
+  <!-- ================================================================ -->
+
+  <!-- 7. SqlServerPartnersReader -->
+  <div class="ep-card sql">
+    <div class="ep-head">
+      <span class="route">SqlServerPartnersReader</span>
+      <span class="badge sql">MSSQL data reader</span>
+    </div>
+    <h3>Triển khai 3 interfaces: IBootstrapSnapshotReader, IFullRefreshReader, IChangeTrackingReader</h3>
+
+    <div class="split">
+      <div>
+        <p><b>1. Bootstrap reader — đọc toàn bộ dữ liệu + CT version baseline</b></p>
+        <pre style="margin-top:6px"><span class="k">BEGIN TRANSACTION</span>;  <span class="c">-- ReadCommitted</span>
+  @baseline = <span class="f">CHANGE_TRACKING_CURRENT_VERSION</span>()
+  <span class="k">SELECT</span> {columns} <span class="k">FROM</span> [dbo].[CRM.Partners] <span class="k">WITH</span> (READPAST)
+  @version_after = <span class="f">CHANGE_TRACKING_CURRENT_VERSION</span>()
+  <span class="k">if</span> (@baseline == @version_after) → <span class="k">COMMIT</span>, <span class="k">return</span> data
+  <span class="k">else</span> → <span class="k">ROLLBACK</span>, retry (max 3)
+<span class="c">-- Không có COMMIT sau loop — throw InvalidOperationException nếu retry hết 3 lần</span></pre>
+        <div class="callout key"><b>READPAST + version verify</b> — thay thế Snapshot Isolation (không cần bật trên DB). Skip dirty rows + kiểm tra CT version consistency giữa đầu và cuối transaction.</div>
+      </div>
+      <div>
+        <p><b>2. CT change reader:</b></p>
+        <pre style="margin-top:6px"><span class="k">BEGIN TRANSACTION</span>;  <span class="c">-- ReadCommitted</span>
+  @min_valid = <span class="f">CHANGE_TRACKING_MIN_VALID_VERSION</span>(@object_id)
+  <span class="k">if</span> (@min_valid &gt; @checkpoint) → throw CheckpointInvalidException
+  @upper = <span class="f">CHANGE_TRACKING_CURRENT_VERSION</span>()
+  <span class="k">SELECT</span> CT.*, P.*
+  <span class="k">FROM</span> <span class="f">CHANGETABLE</span>(CHANGES ..., @checkpoint) CT
+  <span class="k">LEFT JOIN</span> ... <span class="k">AS</span> P <span class="k">WITH</span> (READPAST)
+  <span class="k">WHERE</span> CT.SYS_CHANGE_VERSION &lt;= @upper
+<span class="k">COMMIT</span>;</pre>
+        <div class="callout"><b>CHANGETABLE:</b> Table-valued function của SQL Server Change Tracking — không bị ảnh hưởng bởi DML transaction khác. READPAST chỉ áp dụng cho LEFT JOIN tới source table.</div>
+
+        <p style="margin-top:8px"><b>3. Full refresh reader:</b></p>
+        <p class="note"><code>SELECT {columns} FROM [dbo].[CRM.Partners]</code> — không transaction, không hint. Gọi từ <code>SyncOrchestrator</code> path không dùng trong pilot hiện tại.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8. PostgresPartnersWriter -->
+  <div class="ep-card pg">
+    <div class="ep-head">
+      <span class="route">PostgresPartnersWriter</span>
+      <span class="badge pg">PostgreSQL writer</span>
+    </div>
+    <h3>Triển khai ISyncBatchApplier — ghi data + checkpoint trong 1 transaction</h3>
+
+    <div class="split">
+      <div>
+        <p><b>ApplyBootstrapAsync:</b></p>
+        <pre style="margin-top:6px"><span class="k">BEGIN</span>
+  <span class="c">-- Upsert all rows from bootstrap read</span>
+  INSERT INTO report.partners (...) VALUES (...)
+    ON CONFLICT (partner_id) DO UPDATE SET ...
+
+  <span class="c">-- Deactivate rows not in current bootstrap batch</span>
+  UPDATE report.partners SET is_active = false
+  WHERE source_system = 'erp'
+    AND partner_id != ALL(@snapshotPks)
+
+  <span class="c">-- Set checkpoint = baseline version</span>
+  UPDATE sync_meta.checkpoint
+  SET last_sync_version = @baselineVersion,
+      sync_status = 'ready', ...
+  WHERE source_table = @sourceTable
+<span class="k">COMMIT</span></pre>
+        <div class="callout key" style="margin-top:6px"><b>is_active = IsCustomer.</b> <code>COALESCE(EXCLUDED.is_customer, false)</code> — partner chỉ active nếu là customer trên ERP.</div>
+      </div>
+      <div>
+        <p><b>ApplyBatchAsync (CT):</b></p>
+        <pre style="margin-top:6px"><span class="k">BEGIN</span>
+  <span class="c">-- Deactivate deleted rows (CT op = 'D')</span>
+  UPDATE report.partners SET is_active = false
+  WHERE partner_id = ANY(@deletePks)
+
+  <span class="c">-- Deactivate non-customer rows (CT op = 'I'/'U', IsCustomer != true)</span>
+  UPDATE report.partners SET is_active = false
+  WHERE partner_id = ANY(@filterOutPks)
+
+  <span class="c">-- Upsert active customer rows (CT op = 'I'/'U', IsCustomer == true)</span>
+  INSERT INTO report.partners (...) VALUES (...)
+    ON CONFLICT (partner_id) DO UPDATE SET ...
+
+  <span class="c">-- Advance checkpoint (optimistic guard)</span>
+  UPDATE sync_meta.checkpoint SET ...
+  WHERE source_table = @sourceTable
+    AND last_sync_version = @previousCheckpoint
+  <span class="k">if</span> (affected == 0) → <span class="k">ROLLBACK</span>, <span class="k">return</span> CONCURRENT_CHECKPOINT
+<span class="k">COMMIT</span></pre>
+        <div class="callout" style="margin-top:6px"><b>Bootstrap deactivate:</b> <code>partner_id != ALL(@snapshotPks)</code> — tất cả rows không có trong lần chạy bootstrap hiện tại sẽ bị deactivate. Khi không có row nào (0 partners), ALL rows bị deactivate (behavior đúng — không có partner nào trên ERP).</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9. PostgresSyncCheckpointStore -->
+  <div class="ep-card pg">
+    <div class="ep-head">
+      <span class="route">PostgresSyncCheckpointStore</span>
+      <span class="badge pg">Checkpoint CRUD</span>
+    </div>
+    <h3>Quản lý checkpoint — đọc, advance, transition to full resync</h3>
+
+    <div class="split">
+      <div>
+        <p><b>Methods:</b></p>
+        <table>
+          <tr><th>Method</th><th>SQL</th><th>Mục đích</th></tr>
+          <tr><td><code>GetAsync()</code></td><td><code>SELECT ... FROM sync_meta.checkpoint WHERE source_table = @t</code></td><td>Đọc trạng thái hiện tại</td></tr>
+          <tr><td><code>AdvanceAsync()</code></td><td><code>UPDATE ... SET last_sync_version = @next, last_success_at = NOW(), ... WHERE source_table = @t AND last_sync_version = @prev</code></td><td>Advance checkpoint với optimistic guard</td></tr>
+          <tr><td><code>TransitionToFullResyncAsync()</code></td><td><code>UPDATE ... SET sync_status = 'requires_full_resync', ... WHERE source_table = @t</code></td><td>Transition khi error (không check version — force set)</td></tr>
+        </table>
+      </div>
+      <div>
+        <div class="callout key" style="margin-top:0"><b>Optimistic guard:</b> <code>AdvanceAsync</code> chỉ update nếu <code>last_sync_version == @previousCheckpoint</code>. Nếu worker khác đã advance → 0 rows affected → rollback.</div>
+        <div class="callout danger" style="margin-top:10px"><b>TransitionToFullResyncAsync:</b> Không có optimistic guard — có thể ghi đè checkpoint của worker khác. Tuy nhiên, chỉ gọi khi bootstrap/CT sync gặp lỗi, nên concurrent access là rare.</div>
+
+        <p style="margin-top:14px"><b>Dòng dữ liệu checkpoint qua 4 giai đoạn:</b></p>
+        <table>
+          <tr><th>Giai đoạn</th><th>Thành phần</th><th>SQL</th><th>Trạng thái sau</th></tr>
+          <tr><td><b>1. Seed thủ công</b><br><span style="font-size:12px;color:var(--muted)">Chạy 1 lần khi deploy</span></td><td><code>002-central-db-sync-seed.sql</code></td><td><code>INSERT INTO sync_meta.checkpoint (source_table, sync_status) VALUES ('CRM.Partners', 'pending_initial_sync') ON CONFLICT DO NOTHING</code></td><td><code>sync_status = pending_initial_sync</code><br><code>last_sync_version = NULL</code><br>→ chưa có dữ liệu</td></tr>
+          <tr><td><b>2. Bootstrap</b><br><span style="font-size:12px;color:var(--muted)">Full sync</span></td><td><code>PostgresPartnersWriter.ApplyBootstrapAsync()</code><br>dòng 214-230</td><td><code>UPDATE sync_meta.checkpoint SET last_sync_version = @baselineVersion, sync_status = 'ready', last_success_at = NOW(), consecutive_failure_count = 0, ... WHERE source_table = @sourceTable</code></td><td><code>sync_status = ready</code><br><code>last_sync_version = {CT version}</code><br>→ baseline sẵn sàng</td></tr>
+          <tr><td><b>3. CT incremental</b><br><span style="font-size:12px;color:var(--muted)">Mỗi 1 phút</span></td><td><code>PostgresSyncCheckpointStore.AdvanceAsync()</code></td><td><code>UPDATE sync_meta.checkpoint SET last_sync_version = @next, last_success_at = NOW(), ... WHERE source_table = @t AND last_sync_version = @prev</code></td><td><code>last_sync_version tăng dần</code><br><code>consecutive_failure_count = 0</code><br>→ phiên bản mới nhất</td></tr>
+          <tr><td><b>4. Error</b><br><span style="font-size:12px;color:var(--muted)">Khi sync failed</span></td><td><code>PostgresSyncCheckpointStore.TransitionToFullResyncAsync()</code></td><td><code>UPDATE sync_meta.checkpoint SET sync_status = 'requires_full_resync', last_failure_at = NOW(), consecutive_failure_count = consecutive_failure_count + 1, last_error_code = @code, ... WHERE source_table = @t</code></td><td><code>sync_status = requires_full_resync</code><br><code>consecutive_failure_count + 1</code><br>→ cần bootstrap lại</td></tr>
+        </table>
+        <div class="callout" style="margin-top:10px"><b>Lưu ý:</b> Checkpoint không tự có dữ liệu. Cần seed SQL để tạo row (<code>pending_initial_sync</code>), sau đó bootstrap update thành <code>ready</code> + version thực tế. CT chỉ advance version, không đổi status. Error transition chỉ set status, không đổi version. Cả 4 thao tác đều là <b>UPDATE</b> (hoặc INSERT 1 lần từ seed) — checkpoint chỉ có 1 row per table, update tại chỗ.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 10. PostgresSyncRunLog -->
+  <div class="ep-card pg">
+    <div class="ep-head">
+      <span class="route">PostgresSyncRunLog</span>
+      <span class="badge pg">Audit logger</span>
+    </div>
+    <h3>Append-only audit log — mỗi lần sync là 1 row</h3>
+
+    <div class="split">
+      <div>
+        <p><b>Mục đích:</b> Ghi lại toàn bộ lịch sử sync engine để hỗ trợ debug, monitoring và auditing.</p>
+        <p style="margin-top:8px"><b>Columns:</b></p>
+        <table>
+          <tr><th>Cột</th><th>Mô tả</th></tr>
+          <tr><td><code>id</code></td><td>BIGSERIAL — auto increment</td></tr>
+          <tr><td><code>source_table</code></td><td>Tên table (VD: CRM.Partners)</td></tr>
+          <tr><td><code>run_id</code></td><td>GUID — xác định duy nhất 1 lần chạy</td></tr>
+          <tr><td><code>mode</code></td><td>Bootstrap / ChangeTracking / Orchestrator</td></tr>
+          <tr><td><code>outcome</code></td><td>succeeded / no_changes / failed / skipped_locked / skipped_dependency / requires_full_resync</td></tr>
+          <tr><td><code>rows_read / upserted / deactivated / deleted</code></td><td>Row counts</td></tr>
+          <tr><td><code>checkpoint_before / after</code></td><td>CT version range</td></tr>
+          <tr><td><code>duration_ms</code></td><td>Thời gian chạy</td></tr>
+          <tr><td><code>error_code / message</code></td><td>Chi tiết lỗi nếu failed</td></tr>
+        </table>
+      </div>
+      <div>
+        <p><b>Outcome ý nghĩa:</b></p>
+        <table>
+          <tr><th>outcome</th><th>mode</th><th>Ý nghĩa</th></tr>
+          <tr><td><code>succeeded</code></td><td>Bootstrap/CT</td><td>Sync thành công, data + checkpoint đã update</td></tr>
+          <tr><td><code>no_changes</code></td><td>ChangeTracking</td><td>Không có thay đổi từ checkpoint → upper_watermark, chỉ advance checkpoint</td></tr>
+          <tr><td><code>failed</code></td><td>Bootstrap/CT</td><td>Lỗi, không advance checkpoint (retry ở cycle sau)</td></tr>
+          <tr><td><code>skipped_locked</code></td><td>Bootstrap/CT</td><td>Không acquire được advisory lock</td></tr>
+          <tr><td><code>skipped_dependency</code></td><td>Orchestrator</td><td>Dependency chưa ready</td></tr>
+          <tr><td><code>requires_full_resync</code></td><td>ChangeTracking</td><td>Checkpoint invalid → cần full resync</td></tr>
+        </table>
+        <div class="callout sql" style="margin-top:8px"><b>Index:</b> <code>idx_sync_run_log_table_started (source_table, started_at DESC)</code> — tối ưu query xem log gần nhất theo table.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 11. PostgresTableSyncLock -->
+  <div class="ep-card pg">
+    <div class="ep-head">
+      <span class="route">PostgresTableSyncLock</span>
+      <span class="badge pg">Distributed lock</span>
+    </div>
+    <h3>Per-table distributed lock — PostgreSQL advisory lock</h3>
+
+    <div class="split">
+      <div>
+        <p><b>Cách hoạt động:</b></p>
+        <pre style="margin-top:6px"><span class="c">-- Hash table name → 64-bit integer</span>
+@lockKey = FNV-1a("central-db-sync:{sourceTable}")
+
+<span class="c">-- Try acquire (non-blocking)</span>
+<span class="k">SELECT</span> pg_try_advisory_lock(@lockKey)
+<span class="c">-- → true: lock acquired, trả về AdvisoryLockHandle</span>
+<span class="c">-- → false: lock busy, trả về null</span>
+
+<span class="c">-- Release khi handle disposed</span>
+<span class="k">SELECT</span> pg_advisory_unlock(@lockKey)</pre>
+      </div>
+      <div>
+        <div class="callout key" style="margin-top:0"><b>MVCC scope:</b> <code>pg_try_advisory_lock</code> là session-level lock. Lock chỉ được giải phóng khi connection đóng hoặc gọi unlock. Không liên quan tới PostgreSQL transaction.</div>
+        <div class="callout" style="margin-top:10px"><b>FNV-1a hash:</b> Deterministic 64-bit — cùng key luôn cho cùng hash. Không collision với hash của table khác vì prefix "central-db-sync:" tạo namespace riêng.</div>
+        <p style="margin-top:12px"><b>Dispose pattern:</b></p>
+        <p class="note"><code>await using var lockHandle = await syncLock.TryAcquireAsync()</code> — C# <code>await using</code> đảm bảo lock handle luôn được dispose (unlock + close connection) khi ra khỏi scope, kể cả khi exception. Không cần try/finally thủ công.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">IV. Interaction Flow</h2>
+  <!-- ================================================================ -->
+
+  <div class="ep-card internal">
+    <div class="ep-head">
+      <span class="route">Sơ đồ tương tác giữa các thành phần</span>
+      <span class="badge internal">System interaction</span>
+    </div>
+
+    <h4>1. Bootstrap flow (manual trigger or orchestrator):</h4>
+    <pre>HTTP POST /bootstrap/CRM.Partners            <span class="c">-- hoặc: Hangfire → SyncOrchestrator</span>
+  │
+  ▼
+<b>CentralDbSyncController</b>                      <span class="c">-- check registered table</span>
+  │
+  ▼
+<b>BootstrapSyncService.ExecuteAsync</b>
+  │
+  ├─► <b>PostgresTableSyncLock.TryAcquireAsync</b>    <span class="c">-- pg_try_advisory_lock</span>
+  │     └─► null? → return SkippedLocked (409)
+  │
+  ├─► <b>SqlServerPartnersReader.ReadAsync</b>        <span class="c">-- MSSQL: CT version + READPAST scan</span>
+  │     └─► <b>MSSQL-SERVER</b>: SELECT ... FROM [dbo].[CRM.Partners] WITH (READPAST)
+  │
+  ├─► <b>PostgresPartnersWriter.ApplyBootstrapAsync</b>  <span class="c">-- PostgreSQL 1 transaction</span>
+  │     ├─► <b>PostgreSQL</b>: INSERT INTO report.partners ... ON CONFLICT DO UPDATE
+  │     ├─► <b>PostgreSQL</b>: UPDATE report.partners SET is_active = false WHERE ...
+  │     └─► <b>PostgreSQL</b>: UPDATE sync_meta.checkpoint SET sync_status = 'ready', ...
+  │
+  ├─► <b>PostgresSyncRunLog.WriteAsync</b>           <span class="c">-- INSERT INTO sync_meta.sync_run_log</span>
+  │
+  └─► <b>Dispose lock handle</b>                    <span class="c">-- pg_advisory_unlock + close connection</span></pre>
+
+    <h4 style="margin-top:16px">2. CT incremental flow (Hangfire scheduled):</h4>
+    <pre>Hangfire: RunPilotAsync()                     <span class="c">-- mỗi 1 phút</span>
+  │
+  ▼
+<b>SyncOrchestrator.ExecuteAsync</b>
+  │
+  ├─► <b>PostgresSyncCheckpointStore.GetAsync</b>     <span class="c">-- SELECT ... FROM sync_meta.checkpoint</span>
+  │     └─► syncStatus = 'ready' + lastSyncVersion = 4
+  │
+  ▼
+<b>ChangeTrackingSyncService.ExecuteAsync</b>
+  │
+  ├─► <b>PostgresTableSyncLock.TryAcquireAsync</b>
+  │
+  ├─► Validate checkpoint (status + version)
+  │
+  ├─► <b>SqlServerPartnersReader.ReadBatchAsync</b>   <span class="c">-- CHANGETABLE(CHANGES ...)</span>
+  │     └─► <b>MSSQL-SERVER</b>: CT query với READPAST
+  │
+  ├─► <b>PostgresPartnersWriter.ApplyBatchAsync</b>   <span class="c">-- 1 transaction</span>
+  │     ├─► UPDATE deactivate (nếu có 'D')
+  │     ├─► INSERT ON CONFLICT (nếu có 'I'/'U')
+  │     └─► UPDATE checkpoint WITH optimistic guard
+  │
+  ├─► <b>PostgresSyncRunLog.WriteAsync</b>
+  │
+  └─► <b>Dispose lock handle</b></pre>
+
+    <h4 style="margin-top:16px">3. Recovery flow (CT invalid → auto full resync):</h4>
+    <pre><b>ChangeTrackingSyncService</b>
+  │
+  ├─► <b>SqlServerPartnersReader.ReadBatchAsync</b>
+  │     └─► <b>MSSQL</b>: CHANGE_TRACKING_MIN_VALID_VERSION &gt; checkpoint version
+  │
+  ├─► Throw <b>CheckpointInvalidException</b>
+  │
+  ├─► <b>checkpointStore.TransitionToFullResyncAsync</b>   <span class="c">-- set status = requires_full_resync</span>
+  │
+  └─► <b>bootstrapService.ExecuteWithProvidedLockAsync</b>
+        │                                                 <span class="c">-- cùng lock handle, không release</span>
+        └─► (giống bootstrap flow)</pre>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">V. Data Model (ERD)</h2>
+  <!-- ================================================================ -->
+
+  <div class="ep-card pg">
+    <div class="ep-head">
+      <span class="route">sync_meta schema — checkpoint + sync_run_log + table_sync_config</span>
+      <span class="badge pg">PostgreSQL sync_meta</span>
+    </div>
+
+    <div class="split">
+      <div>
+        <p><b>sync_meta.checkpoint</b> — trạng thái sync hiện tại của mỗi table</p>
+        <table>
+          <tr><th>Cột</th><th>Type</th><th>Mô tả</th></tr>
+          <tr><td><code>id</code></td><td><code>SERIAL PK</code></td><td>Auto increment</td></tr>
+          <tr><td><code>source_table</code></td><td><code>VARCHAR(255) UNIQUE</code></td><td>Tên table source (VD: CRM.Partners)</td></tr>
+          <tr><td><code>last_sync_version</code></td><td><code>BIGINT</code></td><td>CT version sau lần sync cuối (NULL nếu chưa sync)</td></tr>
+          <tr><td><code>sync_status</code></td><td><code>VARCHAR(50)</code></td><td><code>pending_initial_sync</code> / <code>ready</code> / <code>requires_full_resync</code></td></tr>
+          <tr><td><code>last_success_at</code></td><td><code>TIMESTAMPTZ</code></td><td>Thời điểm sync thành công cuối cùng</td></tr>
+          <tr><td><code>consecutive_failure_count</code></td><td><code>INT DEFAULT 0</code></td><td>Số lần fail liên tiếp</td></tr>
+          <tr><td><code>last_error_code</code></td><td><code>VARCHAR(100)</code></td><td>Error code của lần fail gần nhất</td></tr>
+          <tr><td><code>last_error_message</code></td><td><code>TEXT</code></td><td>Chi tiết lỗi</td></tr>
+          <tr><td><code>last_failure_at</code></td><td><code>TIMESTAMPTZ</code></td><td>Thời điểm fail gần nhất</td></tr>
+          <tr><td><code>created_at</code></td><td><code>TIMESTAMPTZ DEFAULT NOW()</code></td><td></td></tr>
+          <tr><td><code>updated_at</code></td><td><code>TIMESTAMPTZ DEFAULT NOW()</code></td><td>Auto-update qua trigger</td></tr>
+        </table>
+
+        <p style="margin-top:12px"><b>sync_meta.sync_run_log</b> — audit log, append-only</p>
+        <table>
+          <tr><th>Cột</th><th>Type</th><th>Mô tả</th></tr>
+          <tr><td><code>id</code></td><td><code>BIGSERIAL PK</code></td><td>Auto increment</td></tr>
+          <tr><td><code>source_table</code></td><td><code>VARCHAR(255)</code></td><td>Tên table source</td></tr>
+          <tr><td><code>run_id</code></td><td><code>UUID</code></td><td>Unique per run</td></tr>
+          <tr><td><code>mode</code></td><td><code>VARCHAR(50)</code></td><td>Bootstrap / ChangeTracking / Orchestrator</td></tr>
+          <tr><td><code>outcome</code></td><td><code>VARCHAR(50)</code></td><td>17 outcome types</td></tr>
+          <tr><td><code>rows_read / upserted / deactivated / deleted</code></td><td><code>INT</code></td><td>Row counts</td></tr>
+          <tr><td><code>checkpoint_before / after</code></td><td><code>BIGINT</code></td><td>CT version range</td></tr>
+          <tr><td><code>duration_ms</code></td><td><code>INT</code></td><td></td></tr>
+          <tr><td><code>error_code / message</code></td><td><code>VARCHAR / TEXT</code></td><td></td></tr>
+          <tr><td><code>started_at / created_at</code></td><td><code>TIMESTAMPTZ</code></td><td></td></tr>
+        </table>
+      </div>
+      <div>
+        <div class="callout" style="margin-top:0;margin-bottom:10px"><b>⚠️ Dead data — documentation only.</b> Hiện tại <b>không có C# code nào đọc</b> từ <code>table_sync_config</code>. Config hardcode ở <code>CentralDbSyncJobs</code> và <code>CentralDbSyncController</code>. Xem <code>docs/notes/2026-07-19-config-read-gap.md</code>.</div>
+        <p><b>sync_meta.table_sync_config</b> — cấu hình sync cho từng table</p>
+        <table>
+          <tr><th>Cột</th><th>Type</th><th>Mô tả</th></tr>
+          <tr><td><code>id</code></td><td><code>SERIAL PK</code></td><td></td></tr>
+          <tr><td><code>source_table</code></td><td><code>VARCHAR(255) UNIQUE</code></td><td>Tên table trên MSSQL (VD: CRM.Partners)</td></tr>
+          <tr><td><code>target_table</code></td><td><code>VARCHAR(255)</code></td><td>Tên table trên PostgreSQL</td></tr>
+          <tr><td><code>enabled</code></td><td><code>BOOLEAN DEFAULT TRUE</code></td><td>Bật/tắt sync</td></tr>
+          <tr><td><code>dependency_table</code></td><td><code>VARCHAR(255) NULL</code></td><td>Dependency (VD: cần Partners trước)</td></tr>
+          <tr><td><code>created_at / updated_at</code></td><td><code>TIMESTAMPTZ</code></td><td></td></tr>
+        </table>
+
+        <p style="margin-top:12px"><b>report.partners</b> — target data table</p>
+        <table>
+          <tr><th>Cột</th><th>Type</th><th>Mô tả</th></tr>
+          <tr><td><code>id</code></td><td><code>SERIAL PK</code></td><td></td></tr>
+          <tr><td><code>partner_id</code></td><td><code>VARCHAR(50) UNIQUE</code></td><td>PK business key từ ERP</td></tr>
+          <tr><td><code>name</code></td><td><code>VARCHAR(255)</code></td><td></td></tr>
+          <tr><td><code>tax_code</code></td><td><code>VARCHAR(50)</code></td><td></td></tr>
+          <tr><td><code>email</code></td><td><code>VARCHAR(255)</code></td><td></td></tr>
+          <tr><td><code>phone</code></td><td><code>VARCHAR(50)</code></td><td></td></tr>
+          <tr><td><code>address</code></td><td><code>TEXT</code></td><td></td></tr>
+          <tr><td><code>is_customer</code></td><td><code>BOOLEAN</code></td><td>Flag từ ERP</td></tr>
+          <tr><td><code>is_active</code></td><td><code>BOOLEAN DEFAULT FALSE</code></td><td>Ánh xạ: active = isCustomer</td></tr>
+          <tr><td><code>source_system</code></td><td><code>VARCHAR(50) DEFAULT 'erp'</code></td><td></td></tr>
+          <tr><td><code>synced_at</code></td><td><code>TIMESTAMPTZ DEFAULT NOW()</code></td><td></td></tr>
+          <tr><td><code>created_at / updated_at</code></td><td><code>TIMESTAMPTZ</code></td><td></td></tr>
+        </table>
+
+        <div class="callout key" style="margin-top:10px"><b>Relationship:</b> <code>sync_meta.source_table</code> ← <code>//1</code> → <code>report.partners.source_system</code> (logical).<br>
+        <code>sync_run_log.source_table</code> ← FK logical (không enforced).<br>
+        <code>checkpoint.source_table</code> ← FK → <code>table_sync_config.source_table</code>.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">VI. Lock &amp; Transaction Analysis</h2>
+  <!-- ================================================================ -->
+
+  <div class="ep-card internal">
+    <div class="ep-head">
+      <span class="route">Phân tích chi tiết cơ chế lock và transaction qua từng bước</span>
+      <span class="badge internal">Concurrency &amp; Isolation</span>
+    </div>
+
+    <div class="split">
+      <div>
+        <h4>1. PostgreSQL Advisory Lock (session-level)</h4>
+        <table>
+          <tr><th>Thuộc tính</th><th>Giá trị</th></tr>
+          <tr><td>Loại lock</td><td><code>pg_try_advisory_lock(key)</code> — non-blocking</td></tr>
+          <tr><td>Scope</td><td>Session-level (không transaction-scoped)</td></tr>
+          <tr><td>Key</td><td>FNV-1a hash of <code>"central-db-sync:{sourceTable}"</code></td></tr>
+          <tr><td>Giải phóng</td><td><code>await using</code> → Dispose → unlock + close connection</td></tr>
+          <tr><td>Mục đích</td><td>Ngăn 2 worker sync cùng table đồng thời</td></tr>
+          <tr><td>Giới hạn</td><td>Không ngăn conflict cấp transaction (cần optimistic guard riêng)</td></tr>
+        </table>
+
+        <h4 style="margin-top:14px">2. Optimistic Guard trên Checkpoint</h4>
+        <table>
+          <tr><th>Phương thức</th><th>Cách hoạt động</th></tr>
+          <tr><td><code>AdvanceAsync()</code></td><td><code>UPDATE ... WHERE last_sync_version = @prevVersion</code><br>Nếu worker B advance trước, worker A update 0 rows → rollback</td></tr>
+          <tr><td><code>TransitionToFullResyncAsync()</code></td><td>Không guard (force update)<br>→ Chỉ 1 worker active nhờ advisory lock, nên an toàn</td></tr>
+          <tr><td><code>ApplyBatchAsync()</code></td><td>Kiểm tra <code>affected == 0</code> → <code>CONCURRENT_CHECKPOINT</code> outcome</td></tr>
+        </table>
+
+        <h4 style="margin-top:14px">3. MSSQL Transaction Isolation</h4>
+        <table>
+          <tr><th>Component</th><th>Isolation</th><th>Hint</th></tr>
+          <tr><td>Bootstrap reader</td><td><code>ReadCommitted</code></td><td><code>WITH (READPAST)</code></td></tr>
+          <tr><td>CT reader</td><td><code>ReadCommitted</code></td><td><code>WITH (READPAST)</code> trên LEFT JOIN</td></tr>
+          <tr><td>Full refresh reader</td><td>None (no transaction)</td><td>Không hint</td></tr>
+        </table>
+
+        <div class="callout key" style="margin-top:10px"><b>READPAST</b> skip rows đang bị lock bởi transaction khác (dirty rows). Không bị blocked, nhưng có thể miss rows. Kết hợp với CT version verify để đảm bảo consistency.</div>
+      </div>
+
+      <div>
+        <h4>4. PostgreSQL Transaction (Apply)</h4>
+        <table>
+          <tr><th>Component</th><th>Transaction</th><th>Isolation</th></tr>
+          <tr><td><code>ApplyBootstrapAsync</code></td><td>1 transaction (upsert + deactivate + checkpoint)</td><td>ReadCommitted (default)</td></tr>
+          <tr><td><code>ApplyBatchAsync</code></td><td>1 transaction (delete + deactivate + upsert + checkpoint)</td><td>ReadCommitted (default)</td></tr>
+          <tr><td><code>SyncRunLog.WriteAsync</code></td><td>Transaction riêng (sau apply)</td><td>ReadCommitted</td></tr>
+        </table>
+
+        <div class="callout"><b>Log ngoài transaction:</b> <code>WriteAsync</code> nằm ngoài apply transaction. Nếu apply rollback nhưng log thành công → sync_run_log ghi nhận lỗi nhưng checkpoint không đổi. Đây là behavior đúng — log vẫn tồn tại để debug.</div>
+
+        <h4 style="margin-top:14px">5. Concurrent Scenario Matrix</h4>
+        <table>
+          <tr><th>Kịch bản</th><th>Phòng chống</th><th>Kết quả</th></tr>
+          <tr><td>2 workers bootstrap cùng lúc</td><td>Advisory lock</td><td>Worker 2: <code>skipped_locked</code></td></tr>
+          <tr><td>1 bootstrap + 1 CT (lock hết hạn)</td><td>Advisory lock</td><td>CT: <code>skipped_locked</code></td></tr>
+          <tr><td>2 CT sync, lock pass (key collision)</td><td>Optimistic guard</td><td>Worker sau: conflict → rollback → retry cycle sau</td></tr>
+          <tr><td>Bootstrap CT version drift</td><td>Version verify + retry</td><td>Rollback + retry (max 3) → ổn định</td></tr>
+          <tr><td>MSSQL row lock (ERP DML transaction)</td><td>READPAST</td><td>Skip dirty rows → 348 rows trong snapshot</td></tr>
+        </table>
+
+        <div class="callout danger" style="margin-top:10px"><b>Rủi ro:</b> READPAST skip dirty rows → nếu ERP transaction quá lâu (dirty rows không commit kịp), snapshot có thể miss rows. Version verify sẽ bắt được nếu có concurrent DML nhưng không bắt được nếu dirty row là row duy nhất và transaction abort. Bootstrap retry sẽ handle nếu version mismatch.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">VII. Test Metrics</h2>
+  <!-- ================================================================ -->
+
+  <div class="ep-card internal">
+    <div class="ep-head">
+      <span class="route">Kết quả test thực tế — manual via Base44, Postman, MSSQL MCP, PostgreSQL MCP</span>
+      <span class="badge internal">Manual test results</span>
+    </div>
+
+    <div class="split">
+      <div>
+        <h4>Bootstrap (full sync) — endpoint: POST /bootstrap/CRM.Partners</h4>
+        <table>
+          <tr><th>Metric</th><th>Giá trị</th></tr>
+          <tr><td>Rows read from MSSQL</td><td><b>348</b> (với READPAST)</td></tr>
+          <tr><td>Rows upserted to PostgreSQL</td><td><b>348</b></td></tr>
+          <tr><td>Checkpoint after</td><td><b>0</b> (version baseline)</td></tr>
+          <tr><td>Sync status</td><td><code>ready</code></td></tr>
+          <tr><td>Duration</td><td><b>731ms</b></td></tr>
+          <tr><td>outcome</td><td><code>succeeded</code></td></tr>
+        </table>
+
+        <div class="callout key" style="margin-top:8px"><b>Breakdown 731ms:</b> MSSQL scan (~120ms) + network (~200ms) + PostgreSQL transaction (~380ms) + log (~31ms).</div>
+
+        <h4 style="margin-top:14px">Failed bootstrap (snapshot isolation — first attempt)</h4>
+        <table>
+          <tr><th>Metric</th><th>Giá trị</th></tr>
+          <tr><td>Issue</td><td>Snapshot isolation not enabled trên MSSQL</td></tr>
+          <tr><td>Duration</td><td><b>28–37ms</b> (fail nhanh)</td></tr>
+          <tr><td>Giải pháp</td><td>Chuyển sang ReadCommitted + READPAST + verify</td></tr>
+        </table>
+      </div>
+      <div>
+        <h4>CT incremental sync — Hangfire job, 1 row change</h4>
+        <table>
+          <tr><th>Metric</th><th>Giá trị</th></tr>
+          <tr><td>Changes detected</td><td><b>1</b> row (DML trên ERP)</td></tr>
+          <tr><td>Rows upserted</td><td><b>1</b></td></tr>
+          <tr><td>Checkpoint version range</td><td><b>0 → 4</b></td></tr>
+          <tr><td>Duration</td><td><b>551ms</b></td></tr>
+          <tr><td>outcome</td><td><code>succeeded</code></td></tr>
+        </table>
+
+        <div class="callout key" style="margin-top:8px"><b>Breakdown 551ms:</b> CT query (~90ms) + network (~200ms) + PostgreSQL transaction (~240ms) + log (~21ms).</div>
+
+        <h4 style="margin-top:14px">Failed CT (syntax error — READPAST placement)</h4>
+        <table>
+          <tr><th>Metric</th><th>Giá trị</th></tr>
+          <tr><td>Issue</td><td><code>WITH (READPAST)</code> sai vị trí (trước AS P)</td></tr>
+          <tr><td>Duration</td><td><b>48–78ms</b> (fail nhanh — syntax error từ MSSQL)</td></tr>
+          <tr><td>Giải pháp</td><td>Move READPAST sau <code>AS P</code> trong LEFT JOIN</td></tr>
+        </table>
+
+        <h4 style="margin-top:14px">Failed CT (retry timeout on apply)</h4>
+        <table>
+          <tr><th>Metric</th><th>Giá trị</th></tr>
+          <tr><td>Duration</td><td><b>30–40ms</b> (1 attempt transient → immediate fail)</td></tr>
+          <tr><td>Giải pháp</td><td>Retry logic: 3 attempts với exponential backoff (1s, 2s, 4s)</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <h4>Health Check Test — endpoint: GET /health/CRM.Partners</h4>
+    <table>
+      <tr><th>Scenario</th><th>HTTP</th><th>status</th><th>syncStatus</th></tr>
+      <tr><td>Sau bootstrap thành công</td><td>200</td><td><code>0</code> (Healthy)</td><td><code>ready</code></td></tr>
+      <tr><td>Trước bootstrap (chưa seed)</td><td>404</td><td><code>2</code> (Unknown)</td><td><code>null</code></td></tr>
+      <tr><td>Table không tồn tại</td><td>404</td><td><code>2</code> (Unknown)</td><td><code>null</code></td></tr>
+    </table>
+
+    <div class="callout"><b>Test environment:</b> MSSQL <code>UA-DEV-2026-T04S3</code> → PostgreSQL Docker 16 (<code>127.0.0.1:5432</code>). 4 connection strings: DefaultConnection (ERP primary), ErpReplicateConnection (ERP replica), CentralDbConnection (PostgreSQL), ReportingConnection (MSSQL reporting).</div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">VIII. Service Dependencies &amp; DI Registration</h2>
+  <!-- ================================================================ -->
+
+  <div class="ep-card internal">
+    <div class="ep-head">
+      <span class="route">Sơ đồ Dependency Injection và interface registration</span>
+      <span class="badge internal">Service architecture</span>
+    </div>
+
+    <pre><b>Program.cs / DI Container</b>
+
+<span class="c">-- Singletons --</span>
+CentralDbSyncJobs (Stateless)
+
+<span class="c">-- Scoped (mỗi sync run có scope riêng) --</span>
+ISyncCheckpointStore        → <span class="f">PostgresSyncCheckpointStore</span>
+ISyncRunLog                 → <span class="f">PostgresSyncRunLog</span>
+ITableSyncLock              → <span class="f">PostgresTableSyncLock</span>
+IBootstrapSnapshotReader    → <span class="f">SqlServerPartnersReader</span>  (MSSQL)
+IFullRefreshReader          → <span class="f">SqlServerPartnersReader</span>  (MSSQL)
+IChangeTrackingReader       → <span class="f">SqlServerPartnersReader</span>  (MSSQL)
+ISyncBatchApplier           → <span class="f">PostgresPartnersWriter</span>   (PostgreSQL)
+BootstrapSyncService        → <span class="f">BootstrapSyncService</span>
+ChangeTrackingSyncService   → <span class="f">ChangeTrackingSyncService</span>
+ICentralDbSyncHealthService → <span class="f">CentralDbSyncHealthService</span>
+SyncOrchestrator            → <span class="f">SyncOrchestrator</span>
+
+<span class="c">-- Controller --</span>
+CentralDbSyncController     (Scoped) ← inject: <b>BootstrapSyncService</b>, <b>ICentralDbSyncHealthService</b></pre>
+
+    <div class="callout" style="margin-top:10px"><b>Interface segregation:</b> 3 reader interfaces (bootstrap, CT, full refresh) → 1 implementation <code>SqlServerPartnersReader</code>. Dễ dàng thay thế reader cho table khác mà không ảnh hưởng đến writer/logic.</div>
+    <div class="callout key"><b>Connection pooling:</b> MSSQL <code>ErpReplicateConnection</code> (read-only replica) dùng cho reader. PostgreSQL <code>CentralDbConnection</code> dùng cho writer + checkpoint + log + lock. 2 connection strings riêng biệt, giảm load ERP primary.</div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">IX. Summary &amp; Gotchas</h2>
+  <!-- ================================================================ -->
+
+  <div class="ep-card internal">
+    <div class="ep-head">
+      <span class="route">Tổng kết và lưu ý cho team maintain</span>
+      <span class="badge internal">Key takeaways</span>
+    </div>
+
+    <div class="split">
+      <div>
+        <p><b>Architecture decisions:</b></p>
+        <ul style="font-size:13px; color:#cdd7e8; margin:6px 0 0; padding-left:18px;">
+          <li>⛔ <b>Không dùng Snapshot Isolation</b> — dùng ReadCommitted + READPAST + version verify (xem decision record)</li>
+          <li>🔒 <b>Advisory lock không transaction-scoped</b> — lock được giải phóng khi connection close, không phải khi COMMIT/ROLLBACK</li>
+          <li>🧪 <b>Admin check đang disabled</b> — cần re-enable trước UAT</li>
+          <li>🔄 <b>Retry 3 lần + exponential backoff</b> — transient error sẽ retry với 1s, 2s, 4s delay</li>
+          <li>⚠️ <b>Bootstrap deactivate ALL rows không trong lần chạy hiện tại</b> — nếu có 0 partners trên ERP, ALL rows ở PostgreSQL bị deactivate</li>
+        </ul>
+      </div>
+      <div>
+        <p><b>Vận hành:</b></p>
+        <ul style="font-size:13px; color:#cdd7e8; margin:6px 0 0; padding-left:18px;">
+          <li><b>Monitoring:</b> Health endpoint <code>GET /health/CRM.Partners</code> → Base44/Retool</li>
+          <li><b>Debug:</b> <code>sync_meta.sync_run_log</code> có đủ history để trace</li>
+          <li><b>Recovery:</b> Auto full resync khi CT retention cleanup</li>
+          <li><b>Thủ công:</b> <code>POST /bootstrap</code> để force resync</li>
+          <li><b>Lock:</b> <code>pg_advisory_unlock</code> nếu lock không release (connection leak)</li>
+          <li><b>Schedule:</b> 1 phút — có thể tăng lên 5 phút nếu data không thay đổi nhiều</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <footer class="page">
+    <b>Central DB Sync — Phase 1 Pilot</b><br>
+    Source: <code>[dbo].[CRM.Partners]</code> → <code>report.partners</code> · 348 rows · Change Tracking incremental sync<br>
+    Endpoints: <code>GET /health/{table}</code> · <code>POST /bootstrap/{table}</code> · Internal: Hangfire job + 7 DI services<br>
+    PostgreSQL: <code>sync_meta.checkpoint</code> · <code>sync_meta.sync_run_log</code> · <code>sync_meta.table_sync_config</code><br>
+    <span style="font-size:12px">Last updated: 2026-07-19 · <code>docs/central-database-blueprint/phase-1/central-db-sync-endpoints.html</code></span>
+  </footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Central DB Sync — Data Schema Reference</title>
+<style>
+  :root {
+    --bg: #0f1420;
+    --panel: #161d2d;
+    --panel-2: #1c2637;
+    --ink: #e8edf6;
+    --muted: #93a1b8;
+    --border: #2a3550;
+    --sql: #5cc8ff;
+    --sql-bg: #12222e;
+    --pg: #a98bff;
+    --pg-bg: #211b35;
+    --good: #52d99a;
+    --good-bg: #12251c;
+    --warn: #ffd166;
+    --danger: #ff6b6b;
+    --danger-bg: #2a1515;
+    --code-bg: #0b0f18;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: linear-gradient(180deg, #0d1119 0%, #0f1420 100%);
+    color: var(--ink);
+    font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.5;
+    padding: 32px 20px 80px;
+  }
+  .wrap { max-width: 1140px; margin: 0 auto; }
+  header.page { border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 28px; }
+  h1 { font-size: 25px; margin: 0 0 6px; letter-spacing: .2px; }
+  .sub { color: var(--muted); font-size: 14px; }
+  .path {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px; color: var(--pg); background: var(--code-bg);
+    padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border);
+  }
+  h2.section { font-size: 18px; margin: 40px 0 16px; padding-left: 12px; border-left: 4px solid var(--pg); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px; margin-bottom: 24px; overflow: hidden; }
+  .card h3 { margin: 0 0 6px; font-size: 16px; font-weight: 650; }
+  .card h4 { margin: 16px 0 6px; font-size: 14px; color: #cdd7e8; }
+  .card p { margin: 6px 0 0; color: #cdd7e8; font-size: 14px; }
+  .card p.note { color: var(--muted); font-size: 13px; }
+  .badge {
+    font-size: 11px; font-weight: 700; letter-spacing: .6px;
+    text-transform: uppercase; padding: 3px 9px; border-radius: 20px;
+    border: 1px solid transparent; display: inline-block;
+  }
+  .badge.config { color: var(--warn); background: var(--good-bg); border-color: #4c4224; }
+  .badge.cp { color: var(--good); background: var(--good-bg); border-color: #1e4335; }
+  .badge.log { color: var(--sql); background: var(--sql-bg); border-color: #1d3a4a; }
+  .badge.data { color: var(--pg); background: var(--pg-bg); border-color: #40335f; }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px; overflow-x: auto; margin: 10px 0 0;
+    font-size: 12px; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    line-height: 1.55; color: #d7e0f0;
+  }
+  pre .k { color: #ff9ecd; }
+  pre .f { color: #8ad6ff; }
+  pre .c { color: #6b7a92; font-style: italic; }
+  pre .s { color: #b7e18a; }
+  pre .dim { color: #4a5a78; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 0; font-size: 13px; }
+  table th, table td { text-align: left; padding: 8px 10px; border: 1px solid var(--border); vertical-align: top; }
+  table th { background: var(--panel-2); color: #9aadcc; font-weight: 600; white-space: nowrap; }
+  table td { color: #cdd7e8; }
+  table td code { font-size: 12px; }
+  .col-type { font-family: ui-monospace, monospace; font-size: 12px; white-space: nowrap; color: var(--sql); }
+  .col-pk { color: var(--good); font-weight: 700; }
+  .col-fk { color: var(--warn); font-size: 11px; }
+  .callout {
+    background: var(--panel-2); border: 1px solid var(--border); border-left: 4px solid var(--warn);
+    border-radius: 8px; padding: 10px 14px; font-size: 13px; color: #d7e0f0; margin-top: 10px;
+  }
+  .callout b { color: var(--warn); }
+  .callout.key { border-left-color: var(--good); }
+  .callout.key b { color: var(--good); }
+  .callout.sql { border-left-color: var(--sql); }
+  .callout.sql b { color: var(--sql); }
+  .callout.pg { border-left-color: var(--pg); }
+  .callout.pg b { color: var(--pg); }
+  .callout.danger { border-left-color: var(--danger); }
+  .callout.danger b { color: var(--danger); }
+  .flow-box {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px; margin-top: 10px; font-size: 13px; line-height: 1.6;
+  }
+  .flow-box .step { color: var(--sql); font-weight: 600; }
+  .flow-box .arrow { color: var(--muted); }
+  .flow-box .table-ref { color: var(--pg); font-weight: 600; }
+  .flow-box .note { color: var(--muted); font-style: italic; }
+  @media (max-width: 800px) { body { padding: 22px 12px 56px; } }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 800px) { .split { grid-template-columns: 1fr; } }
+  footer.page { margin-top: 46px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="page">
+    <h1>Central DB Sync — Data Schema Reference</h1>
+    <div class="sub"><code class="path">PostgreSQL · schemas: sync_meta, report</code> · Phân tích chi tiết từng bảng, field, luồng dữ liệu và tương tác trong sync engine</div>
+  </header>
+
+  <!-- ================================================================ -->
+  <h2 class="section">I. Tổng quan</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <p>Central DB Sync sử dụng <b>2 schemas</b> trên PostgreSQL, tổng cộng <b>4 bảng</b>:</p>
+    <table>
+      <tr><th>Schema</th><th>Table</th><th>Loại</th><th>Mục đích</th></tr>
+      <tr>
+        <td><code>sync_meta</code></td><td><code>table_sync_config</code></td>
+        <td><span class="badge config">Config</span></td>
+        <td>Đăng ký những table nào được sync, cấu hình sync mode, tier, dependency</td>
+      </tr>
+      <tr>
+        <td><code>sync_meta</code></td><td><code>checkpoint</code></td>
+        <td><span class="badge cp">Checkpoint</span></td>
+        <td>Trạng thái sync hiện tại (version, status, health) cho mỗi table</td>
+      </tr>
+      <tr>
+        <td><code>sync_meta</code></td><td><code>sync_run_log</code></td>
+        <td><span class="badge log">Audit log</span></td>
+        <td>Append-only log — mỗi sync run là 1 row</td>
+      </tr>
+      <tr>
+        <td><code>report</code></td><td><code>partners</code></td>
+        <td><span class="badge data">Target data</span></td>
+        <td>Dữ liệu partner đã sync từ ERP, dùng cho reporting</td>
+      </tr>
+    </table>
+    <div class="callout key">Quan hệ: <code>checkpoint.source_table</code> → FK → <code>table_sync_config.source_table</code>. <code>sync_run_log.source_table</code> là logical FK (không enforced).</div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">II. sync_meta.table_sync_config</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <h3 style="margin:0">sync_meta.table_sync_config</h3>
+      <span class="badge config">Config registry</span>
+    </div>
+    <p class="note" style="margin-top:6px">Sổ đăng ký — khai báo những table nào được sync engine quản lý. Mỗi table chỉ có <b>1 row</b>. Dữ liệu được <b>seed thủ công</b> qua SQL script, không tự động insert từ code.</p>
+
+    <h4>Field definitions:</h4>
+    <table>
+      <tr><th>Column</th><th>Type</th><th>Required</th><th>Default</th><th>Mô tả</th><th>Ghi chú</th></tr>
+      <tr>
+        <td><code>source_table</code></td>
+        <td class="col-type">TEXT</td>
+        <td><span class="col-pk">PK</span></td>
+        <td>—</td>
+        <td>Tên table trên MSSQL source, VD: <code>CRM.Partners</code></td>
+        <td>Phải match chính xác tên table ở ERP. <b>Không alias</b> — checkpoint keys dùng giá trị này.</td>
+      </tr>
+      <tr>
+        <td><code>target_schema</code></td>
+        <td class="col-type">TEXT</td>
+        <td>✅</td>
+        <td><code>'report'</code></td>
+        <td>Schema đích trên PostgreSQL</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>target_table</code></td>
+        <td class="col-type">TEXT</td>
+        <td>✅</td>
+        <td>—</td>
+        <td>Tên table đích trên PostgreSQL, VD: <code>partners</code></td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>sync_mode</code></td>
+        <td class="col-type">TEXT</td>
+        <td>✅</td>
+        <td><code>'ChangeTracking'</code></td>
+        <td>Phương thức sync: <code>ChangeTracking</code> (CT incremental) hoặc <code>FullRefresh</code> (full table scan mỗi lần)</td>
+        <td>Bị ràng buộc CHECK. Pilot dùng ChangeTracking.</td>
+      </tr>
+      <tr>
+        <td><code>sync_tier</code></td>
+        <td class="col-type">TEXT</td>
+        <td>✅</td>
+        <td><code>'Hot'</code></td>
+        <td>Mức độ ưu tiên sync: <code>Hot</code> (sync thường xuyên) hoặc <code>Cold</code> (ít chạy)</td>
+        <td>Pilot dùng Hot.</td>
+      </tr>
+      <tr>
+        <td><code>dependency</code></td>
+        <td class="col-type">TEXT[]</td>
+        <td>❌</td>
+        <td><code>'{}'</code></td>
+        <td>Danh sách table phải sync xong trước table này. Ví dụ: <code>['CRM.Partners']</code></td>
+        <td>SyncOrchestrator kiểm tra dependency trước khi chạy. Partners hiện không có dependency.</td>
+      </tr>
+      <tr>
+        <td><code>expected_sync_interval</code></td>
+        <td class="col-type">INTERVAL</td>
+        <td>✅</td>
+        <td><code>'1 minute'</code></td>
+        <td>Tần suất sync kỳ vọng. Dùng để tính lag tolerance.</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>max_allowed_lag</code></td>
+        <td class="col-type">INTERVAL</td>
+        <td>✅</td>
+        <td><code>'5 minutes'</code></td>
+        <td>Thời gian tối đa cho phép từ lần sync cuối. Vượt quá → Degraded.</td>
+        <td>Health endpoint dùng giá trị này làm default nếu không truyền.</td>
+      </tr>
+      <tr>
+        <td><code>ownership_scope</code></td>
+        <td class="col-type">TEXT</td>
+        <td>❌</td>
+        <td><code>'erp'</code></td>
+        <td>Phạm vi ownership của dữ liệu, dùng để filter khi deactivate</td>
+        <td>PostgresPartnersWriter dùng <code>WHERE source_system = ownership_scope</code> khi deactivate orphan rows.</td>
+      </tr>
+      <tr>
+        <td><code>enabled</code></td>
+        <td class="col-type">BOOLEAN</td>
+        <td>✅</td>
+        <td><code>TRUE</code></td>
+        <td>Bật/tắt sync cho table này</td>
+        <td>SyncOrchestrator check <code>config.Enabled</code> trước khi xử lý.</td>
+      </tr>
+    </table>
+
+    <h4>Seed data — CRM.Partners:</h4>
+    <pre><span class="c">-- 002-central-db-sync-seed.sql</span>
+<span class="k">INSERT INTO</span> sync_meta.table_sync_config
+    (source_table, target_schema, target_table, sync_mode, sync_tier,
+     dependency, expected_sync_interval, max_allowed_lag, ownership_scope, enabled)
+<span class="k">VALUES</span>
+    (<span class="s">'CRM.Partners'</span>, <span class="s">'report'</span>, <span class="s">'partners'</span>, <span class="s">'ChangeTracking'</span>, <span class="s">'Hot'</span>,
+     <span class="s">'{}'</span>, <span class="s">'1 minute'</span>, <span class="s">'5 minutes'</span>, <span class="s">'erp'</span>, TRUE)
+<span class="k">ON CONFLICT</span> (source_table) <span class="k">DO NOTHING</span>;</pre>
+
+    <h4>Tương tác với các thành phần:</h4>
+    <div class="flow-box">
+      <span class="step">SyncOrchestrator</span> <span class="arrow">→</span> nhận <span class="table-ref">TableSyncConfig[]</span> từ caller — không đọc từ DB. Config hiện hardcode trong <code>CentralDbSyncJobs</code>.<br>
+      <span class="step">Controller</span> <span class="arrow">→</span> validate qua <code>RegisteredTables</code> hardcode — không đọc từ DB<br>
+      <span class="step">checkpoint</span> <span class="arrow">→</span> FK reference <span class="table-ref">table_sync_config.source_table</span> (source_table là PK)
+      <div class="note" style="margin-top:6px">📍 Bảng này chỉ ghi 1 lần khi seed. Không có component nào update table_sync_config trong runtime.</div>
+      <div class="callout danger"><b>⚠️ Dead data — documentation only.</b> Hiện tại <b>không có C# code nào đọc</b> từ <code>table_sync_config</code>. Config được hardcode ở <code>CentralDbSyncJobs.RunPilotAsync()</code> và <code>CentralDbSyncController</code>. Xem <code>docs/notes/2026-07-19-config-read-gap.md</code> để biết chi tiết.</div>
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">III. sync_meta.checkpoint</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <h3 style="margin:0">sync_meta.checkpoint</h3>
+      <span class="badge cp">Sync progress</span>
+    </div>
+    <p class="note" style="margin-top:6px">Trái tim của sync engine — lưu trạng thái sync hiện tại. Mỗi table có <b>1 row</b>. Được đọc/ghi bởi hầu hết các component.</p>
+
+    <h4>Field definitions:</h4>
+    <table>
+      <tr><th>Column</th><th>Type</th><th>Required</th><th>Default</th><th>Mô tả</th><th>Ghi chú</th></tr>
+      <tr>
+        <td><code>source_table</code></td>
+        <td class="col-type">TEXT</td>
+        <td><span class="col-pk">PK</span> <span class="col-fk">FK → table_sync_config</span></td>
+        <td>—</td>
+        <td>Tên table, VD: <code>CRM.Partners</code></td>
+        <td>FK đảm bảo không thể có checkpoint cho table chưa đăng ký.</td>
+      </tr>
+      <tr>
+        <td><code>last_sync_version</code></td>
+        <td class="col-type">BIGINT</td>
+        <td>❌</td>
+        <td>NULL</td>
+        <td>Database-wide CT watermark cuối cùng mà table này đã xử lý thành công. NULL nếu chưa bootstrap.</td>
+        <td>Giá trị này là <b>baseline</b> cho CHANGETABLE query của riêng <code>source_table</code> ở lần sync tiếp theo. Có thể tăng dù table đó không có row thay đổi.</td>
+      </tr>
+      <tr>
+        <td><code>sync_status</code></td>
+        <td class="col-type">TEXT</td>
+        <td>✅</td>
+        <td><code>'pending_initial_sync'</code></td>
+        <td>Trạng thái hiện tại</td>
+        <td>
+          <code>pending_initial_sync</code> — chờ bootstrap lần đầu<br>
+          <code>ready</code> — đã sync thành công, sẵn sàng cho CT incremental<br>
+          <code>requires_full_resync</code> — cần bootstrap lại (do lỗi)
+        </td>
+      </tr>
+      <tr>
+        <td><code>last_attempt_at</code></td>
+        <td class="col-type">TIMESTAMPTZ</td>
+        <td>❌</td>
+        <td>NULL</td>
+        <td>Thời điểm sync lần gần nhất (cả thành công lẫn thất bại)</td>
+        <td>Set bởi TransitionToFullResyncAsync khi error. Không set bởi bootstrap/CT success path.</td>
+      </tr>
+      <tr>
+        <td><code>last_success_at</code></td>
+        <td class="col-type">TIMESTAMPTZ</td>
+        <td>❌</td>
+        <td>NULL</td>
+        <td>Thời điểm sync thành công cuối cùng</td>
+        <td>Set bởi cả bootstrap và CT. Dùng để tính lag (so với current time).</td>
+      </tr>
+      <tr>
+        <td><code>last_failure_at</code></td>
+        <td class="col-type">TIMESTAMPTZ</td>
+        <td>❌</td>
+        <td>NULL</td>
+        <td>Thời điểm sync thất bại gần nhất</td>
+        <td>Set bởi TransitionToFullResyncAsync.</td>
+      </tr>
+      <tr>
+        <td><code>consecutive_failure_count</code></td>
+        <td class="col-type">INTEGER</td>
+        <td>✅</td>
+        <td>0</td>
+        <td>Số lần sync fail liên tiếp. Reset về 0 khi sync thành công.</td>
+        <td>Dùng trong health check: > 0 → Degraded. Tăng dần mỗi lần TransitionToFullResyncAsync.</td>
+      </tr>
+      <tr>
+        <td><code>last_error_code</code></td>
+        <td class="col-type">TEXT</td>
+        <td>❌</td>
+        <td>NULL</td>
+        <td>Error code của lần fail gần nhất. Null khi thành công.</td>
+        <td>VD: <code>BootstrapFailed</code>, <code>ApplyRetriesExhausted</code>, <code>CONCURRENT_CHECKPOINT</code></td>
+      </tr>
+      <tr>
+        <td><code>last_error_message</code></td>
+        <td class="col-type">TEXT</td>
+        <td>❌</td>
+        <td>NULL</td>
+        <td>Chi tiết lỗi (exception message, inner exception)</td>
+        <td></td>
+      </tr>
+    </table>
+
+    <h4>Semantics của <code>last_sync_version</code>:</h4>
+    <div class="callout key">
+      <b>CT version thuộc phạm vi SQL Server database, không thuộc riêng từng table.</b>
+      <code>CHANGE_TRACKING_CURRENT_VERSION()</code> trả về một watermark chung cho toàn database có Change Tracking.
+      Vì vậy, thay đổi trên <code>TableA</code> có thể làm current version tăng từ <code>100</code> lên <code>101</code>,
+      dù <code>TableB</code> không có row nào thay đổi.
+    </div>
+    <div class="flow-box">
+      <span class="step">Job TableA</span>
+      <span class="arrow">→</span> đọc <code>CHANGETABLE(CHANGES TableA, 100)</code>
+      <span class="arrow">→</span> có rows
+      <span class="arrow">→</span> update checkpoint của <span class="table-ref">TableA</span> thành <code>101</code><br>
+      <span class="step">Job TableB</span>
+      <span class="arrow">→</span> đọc <code>CHANGETABLE(CHANGES TableB, 100)</code>
+      <span class="arrow">→</span> không có rows
+      <span class="arrow">→</span> vẫn update checkpoint của <span class="table-ref">TableB</span> thành <code>101</code>
+    </div>
+    <div class="callout" style="margin-top:10px">
+      <b>Điểm quan trọng:</b> thay đổi trên một source table không trực tiếp update checkpoint của các table khác.
+      Mỗi sync job chạy độc lập và câu <code>UPDATE</code> luôn có
+      <code>WHERE source_table = @sourceTable AND last_sync_version = @previousCheckpoint</code>.
+      Các checkpoint trông giống như được cập nhật cùng lúc vì từng job đều đọc cùng database-wide upper watermark,
+      rồi tự advance row của chính nó, kể cả khi kết quả là <code>no_changes</code>.
+    </div>
+    <table style="margin-top:10px">
+      <tr><th>Không nên diễn giải</th><th>Nên diễn giải</th></tr>
+      <tr>
+        <td><code>last_sync_version = 101</code> nghĩa là table có row thay đổi ở version 101</td>
+        <td>Job của table đã kiểm tra và xử lý an toàn mọi CT event của table đó đến hết watermark 101</td>
+      </tr>
+      <tr>
+        <td>Hai table có cùng checkpoint nghĩa là dữ liệu hai table thay đổi cùng lúc</td>
+        <td>Hai table đã được xử lý đến cùng một mốc trong timeline CT chung của database</td>
+      </tr>
+      <tr>
+        <td>Checkpoint nhảy qua nhiều version là mất dữ liệu</td>
+        <td>Các version ở giữa có thể thuộc table khác; <code>CHANGETABLE</code> vẫn lọc event theo table đang sync</td>
+      </tr>
+    </table>
+
+    <h4>Luồng thay đổi trạng thái (state machine):</h4>
+    <pre>
+<span class="dim">┌─────────────────────────────────────────────────────────────────┐</span>
+<span class="dim">│                      STATE TRANSITIONS                          │</span>
+<span class="dim">├─────────────────────────────────────────────────────────────────┤</span>
+<span class="dim">│</span>                                                                   
+    <span class="c">-- Seed:</span>   pending_initial_sync  (last_sync_version = NULL)
+         │
+         ▼  (bootstrap thành công)
+    <span class="s">ready</span>  (last_sync_version = baseline CT version)
+         │
+         ├── (CT sync thành công) → <span class="s">ready</span>  (last_sync_version tăng)
+         │
+         ├── (CT lỗi) → <span class="k">requires_full_resync</span>  (consecutive_failure_count + 1)
+         │       │
+         │       ▼  (bootstrap lại)
+         │    <span class="s">ready</span>
+         │
+         └── (bootstrap lỗi) → <span class="k">requires_full_resync</span>
+                  │
+                  ▼  (bootstrap lại)
+               <span class="s">ready</span>
+<span class="dim">└─────────────────────────────────────────────────────────────────┘</span></pre>
+
+    <h4>Tương tác với các thành phần:</h4>
+    <div class="flow-box">
+      <span class="step">PostgresSyncCheckpointStore</span>
+      <div style="padding-left:16px;margin-top:4px">
+        • <code>GetAsync()</code> — đọc checkpoint để quyết định đường đi<br>
+        • <code>AdvanceAsync()</code> — CT sync: update version + reset fail count<br>
+        • <code>TransitionToFullResyncAsync()</code> — lỗi: set status + ghi error metadata
+      </div>
+      <span class="step" style="margin-top:6px;display:inline-block">PostgresPartnersWriter</span>
+      <div style="padding-left:16px;margin-top:4px">
+        • Bootstrap: UPDATE checkpoint SET version + status = 'ready' (trong cùng transaction với data upsert)<br>
+        • CT batch: UPDATE checkpoint SET version (optimistic guard trong cùng transaction)
+      </div>
+      <span class="step" style="margin-top:6px;display:inline-block">CentralDbSyncHealthService</span>
+      <div style="padding-left:16px;margin-top:4px">
+        • Đọc checkpoint → quyết định Healthy / Degraded / Unknown
+      </div>
+      <span class="step" style="margin-top:6px;display:inline-block">SyncOrchestrator</span>
+      <div style="padding-left:16px;margin-top:4px">
+        • Đọc checkpoint → quyết định route: bootstrap hay CT service
+      </div>
+      <span class="step" style="margin-top:6px;display:inline-block">ChangeTrackingSyncService</span>
+      <div style="padding-left:16px;margin-top:4px">
+        • Validate checkpoint null/status/version → RequiresFullResync hoặc ReadBatch
+      </div>
+      <div class="note" style="margin-top:6px">📍 Checkpoint là row duy nhất (1 per table). Tất cả thao tác đều là UPDATE, không có INSERT mới (trừ seed).</div>
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">IV. sync_meta.sync_run_log</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <h3 style="margin:0">sync_meta.sync_run_log</h3>
+      <span class="badge log">Audit trail</span>
+    </div>
+    <p class="note" style="margin-top:6px">Append-only audit log. Mỗi sync run (bootstrap, CT, orchestrator decision) ghi <b>1 row</b>. Không bao giờ UPDATE hay DELETE — chỉ INSERT. Dùng để debug, monitoring, trace lịch sử.</p>
+
+    <h4>Field definitions:</h4>
+    <table>
+      <tr><th>Column</th><th>Type</th><th>Required</th><th>Default</th><th>Mô tả</th><th>Ghi chú</th></tr>
+      <tr>
+        <td><code>id</code></td>
+        <td class="col-type">BIGSERIAL</td>
+        <td><span class="col-pk">PK</span></td>
+        <td>auto</td>
+        <td>Auto increment — thứ tự log</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>source_table</code></td>
+        <td class="col-type">TEXT</td>
+        <td>✅</td>
+        <td>—</td>
+        <td>Tên table, VD: <code>CRM.Partners</code></td>
+        <td>Logical FK tới table_sync_config (không enforced vì là append log).</td>
+      </tr>
+      <tr>
+        <td><code>run_id</code></td>
+        <td class="col-type">UUID</td>
+        <td>✅</td>
+        <td>—</td>
+        <td>UUID xác định duy nhất 1 lần chạy. Dùng để trace xuyên suốt.</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>mode</code></td>
+        <td class="col-type">TEXT</td>
+        <td>✅</td>
+        <td>—</td>
+        <td>Loại sync run: <code>Bootstrap</code>, <code>ChangeTracking</code>, <code>Orchestrator</code></td>
+        <td>Orchestrator mode chỉ log khi skip dependency; không log mỗi lần orchestrate.</td>
+      </tr>
+      <tr>
+        <td><code>outcome</code></td>
+        <td class="col-type">TEXT</td>
+        <td>✅</td>
+        <td>—</td>
+        <td>Kết quả sync run. Bị ràng buộc CHECK:</td>
+        <td>
+          <code>succeeded</code> — thành công<br>
+          <code>no_changes</code> — CT không có thay đổi<br>
+          <code>failed</code> — lỗi<br>
+          <code>skipped_locked</code> — lock busy<br>
+          <code>skipped_dependency</code> — dependency chưa ready<br>
+          <code>requires_full_resync</code> — checkpoint invalid
+        </td>
+      </tr>
+      <tr>
+        <td><code>rows_read</code></td>
+        <td class="col-type">INTEGER</td>
+        <td>✅</td>
+        <td>0</td>
+        <td>Số rows đọc được từ MSSQL (bootstrap: tổng rows, CT: số changes)</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>rows_upserted</code></td>
+        <td class="col-type">INTEGER</td>
+        <td>✅</td>
+        <td>0</td>
+        <td>Số rows INSERT/UPDATE thành công trên PostgreSQL</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>rows_deactivated</code></td>
+        <td class="col-type">INTEGER</td>
+        <td>✅</td>
+        <td>0</td>
+        <td>Số rows bị SET is_active = false (bootstrap: orphan rows, CT: delete + non-customer)</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>rows_deleted</code></td>
+        <td class="col-type">INTEGER</td>
+        <td>✅</td>
+        <td>0</td>
+        <td>Số rows bị xóa vật lý (hiện tại pilot không dùng — CT delete chuyển thành deactivate)</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>checkpoint_before</code></td>
+        <td class="col-type">BIGINT</td>
+        <td>❌</td>
+        <td>NULL</td>
+        <td>CT version trước khi sync</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>checkpoint_after</code></td>
+        <td class="col-type">BIGINT</td>
+        <td>❌</td>
+        <td>NULL</td>
+        <td>CT version sau khi sync</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>started_at</code></td>
+        <td class="col-type">TIMESTAMPTZ</td>
+        <td>✅</td>
+        <td><code>NOW()</code></td>
+        <td>Thời điểm bắt đầu sync run</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>finished_at</code></td>
+        <td class="col-type">TIMESTAMPTZ</td>
+        <td>❌</td>
+        <td>NULL</td>
+        <td>Thời điểm kết thúc</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>duration_ms</code></td>
+        <td class="col-type">INTEGER</td>
+        <td>❌</td>
+        <td>NULL</td>
+        <td>Thời gian chạy (milliseconds)</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>error_code</code></td>
+        <td class="col-type">TEXT</td>
+        <td>❌</td>
+        <td>NULL</td>
+        <td>Mã lỗi nếu outcome = 'failed'. VD: <code>BootstrapFailed</code>, <code>ApplyRetriesExhausted</code></td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>error_message</code></td>
+        <td class="col-type">TEXT</td>
+        <td>❌</td>
+        <td>NULL</td>
+        <td>Chi tiết lỗi (exception message)</td>
+        <td></td>
+      </tr>
+    </table>
+
+    <h4>Index:</h4>
+    <pre><span class="k">CREATE INDEX</span> idx_sync_run_log_table_started
+    <span class="k">ON</span> sync_meta.sync_run_log (source_table, started_at <span class="k">DESC</span>);</pre>
+    <p class="note">Index này tối ưu query: "cho tôi xem lịch sử sync gần nhất của table X" — query thường gặp khi debug.</p>
+
+    <h4>Luồng ghi log:</h4>
+    <div class="flow-box">
+      <span class="step">BootstrapSyncService</span> / <span class="step">ChangeTrackingSyncService</span> / <span class="step">SyncOrchestrator</span>
+      <div style="padding-left:16px;margin-top:4px">
+        │
+        ├─ (sau khi sync hoàn tất) → <span class="step">PostgresSyncRunLog.WriteAsync()</span>
+        │     INSERT INTO <span class="table-ref">sync_run_log</span> (mode, outcome, rows_read, ..., duration_ms)
+        │
+        └─ (log nằm NGOÀI transaction apply data)
+              → Nếu apply thành công mà log fail: <span class="note">dữ liệu đã sync, checkpoint đã update, nhưng không có trace. Acceptable risk.</span>
+              → Nếu apply fail mà log thành công: <span class="note">Log vẫn tồn tại để debug, checkpoint không đổi.</span>
+      </div>
+      <div class="note" style="margin-top:6px">📍 Log là append-only, không có cơ chế cleanup. Cần monitor size theo thời gian. Với interval 1 phút: ~1,440 rows/ngày, ~525k rows/năm — rất nhỏ.</div>
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">V. report.partners</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <h3 style="margin:0">report.partners</h3>
+      <span class="badge data">Target data</span>
+    </div>
+    <p class="note" style="margin-top:6px">Bảng dữ liệu đích — denormalized copy của <code>[dbo].[CRM.Partners]</code> từ ERP. Được sync engine duy trì. Các application query từ bảng này thay vì query trực tiếp ERP.</p>
+
+    <h4>Field definitions:</h4>
+    <table>
+      <tr><th>Column</th><th>Type</th><th>Required</th><th>Default</th><th>Mô tả</th><th>Ghi chú</th></tr>
+      <tr>
+        <td><code>partner_id</code></td>
+        <td class="col-type">INTEGER</td>
+        <td><span class="col-pk">PK</span></td>
+        <td>—</td>
+        <td>Khóa chính — business key từ ERP</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>company_id</code></td>
+        <td class="col-type">INTEGER</td>
+        <td>✅</td>
+        <td>—</td>
+        <td>Công ty sở hữu partner này</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>code</code></td>
+        <td class="col-type">TEXT</td>
+        <td>✅</td>
+        <td>—</td>
+        <td>Mã partner</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>name</code></td>
+        <td class="col-type">TEXT</td>
+        <td>✅</td>
+        <td>—</td>
+        <td>Tên partner</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>is_customer</code></td>
+        <td class="col-type">BOOLEAN</td>
+        <td>✅</td>
+        <td>FALSE</td>
+        <td>Flag từ ERP: partner này có phải khách hàng không</td>
+        <td>Quan trọng: is_active = is_customer. Nếu ERP set is_customer = false → bị deactivate.</td>
+      </tr>
+      <tr>
+        <td><code>is_supplier</code></td>
+        <td class="col-type">BOOLEAN</td>
+        <td>✅</td>
+        <td>FALSE</td>
+        <td>Flag từ ERP: partner này có phải nhà cung cấp không</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>email</code></td>
+        <td class="col-type">TEXT</td>
+        <td>❌</td>
+        <td>NULL</td>
+        <td></td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>phone</code></td>
+        <td class="col-type">TEXT</td>
+        <td>❌</td>
+        <td>NULL</td>
+        <td></td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>activated</code></td>
+        <td class="col-type">BOOLEAN</td>
+        <td>✅</td>
+        <td>TRUE</td>
+        <td>Trạng thái activated từ ERP</td>
+        <td>Không liên quan is_active. Đây là field gốc từ ERP.</td>
+      </tr>
+      <tr>
+        <td><code>is_active</code></td>
+        <td class="col-type">BOOLEAN</td>
+        <td>✅</td>
+        <td>TRUE</td>
+        <td>Sync engine control flag. FALSE = partner đã bị xóa/deactivate trên ERP hoặc không còn là customer</td>
+        <td><b>Field quan trọng nhất.</b> Application query nên filter <code>WHERE is_active = true</code>. Không phải field từ ERP — do sync engine tự quản lý.</td>
+      </tr>
+      <tr>
+        <td><code>synced_at</code></td>
+        <td class="col-type">TIMESTAMPTZ</td>
+        <td>✅</td>
+        <td><code>NOW()</code></td>
+        <td>Thời điểm sync gần nhất cho row này</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>source_system</code></td>
+        <td class="col-type">TEXT</td>
+        <td>✅</td>
+        <td><code>'erp'</code></td>
+        <td>Nguồn dữ liệu. Cho phép multiple sources trong tương lai.</td>
+        <td>Dùng trong bootstrap deactivate: <code>WHERE source_system = 'erp' AND partner_id != ALL(@snapshotPks)</code></td>
+      </tr>
+    </table>
+
+    <h4>Logic is_active:</h4>
+    <div class="flow-box">
+      <span class="step">Bootstrap</span>
+      <div style="padding-left:16px;margin-top:4px">
+        <code>is_active = COALESCE(EXCLUDED.is_customer, false)</code><br>
+        → partner được set active chỉ khi <code>is_customer = true</code> trên ERP
+      </div>
+      <span class="step" style="margin-top:6px;display:inline-block">CT incremental</span>
+      <div style="padding-left:16px;margin-top:4px">
+        • <code>Operation = 'D'</code> (deleted) → <code>is_active = false</code><br>
+        • <code>IsCustomer != true</code> → <code>is_active = false</code><br>
+        • <code>IsCustomer == true</code> → upsert với <code>is_active = true</code>
+      </div>
+      <span class="step" style="margin-top:6px;display:inline-block">Bootstrap deactivate orphan</span>
+      <div style="padding-left:16px;margin-top:4px">
+        <code>UPDATE report.partners SET is_active = false WHERE source_system = 'erp' AND partner_id != ALL(@snapshotPks)</code><br>
+        → Nếu partner không còn trong ERP snapshot → bị deactivate
+      </div>
+      <div class="note" style="margin-top:6px">📍 <b>Không có xóa vật lý.</b> partners chỉ được deactivate (is_active = false), không bao giờ DELETE. Đảm bảo dữ liệu lịch sử vẫn còn để truy vấn.</div>
+    </div>
+
+    <h4>Tương tác với các thành phần:</h4>
+    <div class="flow-box">
+      <span class="step">PostgresPartnersWriter</span>
+      <div style="padding-left:16px;margin-top:4px">
+        • ApplyBootstrapAsync — upsert toàn bộ snapshot + deactivate orphan + set checkpoint (cùng 1 transaction)<br>
+        • ApplyBatchAsync — deactivate delete + non-customer rows + upsert active customer rows + advance checkpoint (cùng 1 transaction)
+      </div>
+      <span class="step" style="margin-top:6px;display:inline-block">Application / Reporting</span>
+      <div style="padding-left:16px;margin-top:4px">
+        • Query <span class="table-ref">report.partners</span> WHERE is_active = true để lấy danh sách customer hiện tại<br>
+        • Dùng cho Base44, Retool, hoặc bất kỳ internal service nào cần dữ liệu partner
+      </div>
+      <div class="note" style="margin-top:6px">📍 report.partners không có foreign key đến sync_meta — độc lập. Sync engine có thể bị tắt mà không ảnh hưởng đến application query (dữ liệu chỉ stale, không mất).</div>
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">VI. ERD — Entity Relationship Diagram</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <h4>Relationships giữa các bảng:</h4>
+    <pre>
+<span class="dim">┌─────────────────────────────┐</span>
+<span class="dim">│</span>  <span class="k">sync_meta.table_sync_config</span>            <span class="c">-- sổ đăng ký</span>
+<span class="dim">│</span>  ──────────────────────────
+<span class="dim">│</span>  source_table     <span class="col-pk">PK</span>  ────────────┐
+<span class="dim">│</span>  target_schema                      │
+<span class="dim">│</span>  target_table                       │
+<span class="dim">│</span>  sync_mode                          │  <span class="col-fk">FK</span>
+<span class="dim">│</span>  sync_tier                          │
+<span class="dim">│</span>  dependency                         │
+<span class="dim">│</span>  expected_sync_interval             │
+<span class="dim">│</span>  max_allowed_lag                    │
+<span class="dim">│</span>  ownership_scope                    │
+<span class="dim">│</span>  enabled                            │
+<span class="dim">└─────────────────────────────┘</span>       │
+                                        │
+<span class="dim">┌─────────────────────────────┐</span>       │
+<span class="dim">│</span>  <span class="k">sync_meta.checkpoint</span>               │  <span class="c">-- trạng thái sync</span>
+<span class="dim">│</span>  ────────────────────────           │
+<span class="dim">│</span>  source_table     <span class="col-pk">PK</span>  <span class="col-fk">FK</span> ──────────┘
+<span class="dim">│</span>  last_sync_version                  <span class="c">-- CT version</span>
+<span class="dim">│</span>  sync_status                        <span class="c">-- pending_initial_sync / ready / requires_full_resync</span>
+<span class="dim">│</span>  last_attempt_at
+<span class="dim">│</span>  last_success_at
+<span class="dim">│</span>  last_failure_at
+<span class="dim">│</span>  consecutive_failure_count
+<span class="dim">│</span>  last_error_code
+<span class="dim">│</span>  last_error_message
+<span class="dim">└─────────────────────────────┘</span>
+
+
+<span class="dim">┌─────────────────────────────┐</span>     <span class="c">-- KHÔNG có FK — logical relationship</span>
+<span class="dim">│</span>  <span class="k">sync_meta.sync_run_log</span>             ────── <span class="dim">source_table (logical)</span>
+<span class="dim">│</span>  ────────────────────────
+<span class="dim">│</span>  id               <span class="col-pk">PK</span>
+<span class="dim">│</span>  source_table
+<span class="dim">│</span>  run_id
+<span class="dim">│</span>  mode
+<span class="dim">│</span>  outcome
+<span class="dim">│</span>  rows_read / upserted / deactivated / deleted
+<span class="dim">│</span>  checkpoint_before / after
+<span class="dim">│</span>  started_at / finished_at / duration_ms
+<span class="dim">│</span>  error_code / error_message
+<span class="dim">└─────────────────────────────┘</span>
+
+
+<span class="dim">┌─────────────────────────────┐</span>     <span class="c">-- ĐỘC LẬP — không có FK đến sync_meta</span>
+<span class="dim">│</span>  <span class="k">report.partners</span>                     
+<span class="dim">│</span>  ────────────────
+<span class="dim">│</span>  partner_id     <span class="col-pk">PK</span>
+<span class="dim">│</span>  company_id
+<span class="dim">│</span>  code
+<span class="dim">│</span>  name
+<span class="dim">│</span>  is_customer
+<span class="dim">│</span>  is_supplier
+<span class="dim">│</span>  email / phone / activated
+<span class="dim">│</span>  <span class="col-pk">is_active</span>          <span class="c">-- sync engine control flag!</span>
+<span class="dim">│</span>  synced_at
+<span class="dim">│</span>  source_system
+<span class="dim">└─────────────────────────────┘</span></pre>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">VII. Data Flow — Tổng quan</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <div class="flow-box">
+      <b>Luồng ghi:</b><br><br>
+      <span class="step">MSSQL (ERP)</span>
+      <span class="arrow">→</span> Reader đọc data
+      <span class="arrow">→</span>
+      <span class="step">Writer upsert</span> <span class="table-ref">report.partners</span>
+      <span class="arrow">+</span> update <span class="table-ref">checkpoint</span>
+      <span class="arrow">+</span> insert <span class="table-ref">sync_run_log</span><br><br>
+      <b>Luồng đọc:</b><br><br>
+      <span class="step">SyncOrchestrator</span> <span class="arrow">→</span> đọc <span class="table-ref">table_sync_config</span> (biết table nào enabled, dependency gì)<br>
+      <span class="step">SyncOrchestrator</span> <span class="arrow">→</span> đọc <span class="table-ref">checkpoint</span> (biết trạng thái → quyết định bootstrap hay CT)<br>
+      <span class="step">HealthService</span> <span class="arrow">→</span> đọc <span class="table-ref">checkpoint</span> (quyết định Healthy/Degraded/Unknown)<br>
+      <span class="step">Application</span> <span class="arrow">→</span> đọc <span class="table-ref">report.partners</span> (lấy dữ liệu reporting)<br>
+      <span class="step">Debug</span> <span class="arrow">→</span> đọc <span class="table-ref">sync_run_log</span> (trace lịch sử sync)<br><br>
+      <b>Luồng seed (1 lần khi deploy):</b><br><br>
+      <code>002-central-db-sync-seed.sql</code>
+      <span class="arrow">→</span> INSERT <span class="table-ref">table_sync_config</span>
+      <span class="arrow">+</span> INSERT <span class="table-ref">checkpoint</span> (pending_initial_sync)
+    </div>
+  </div>
+
+  <footer class="page">
+    <b>Central DB Sync — Phase 1 Pilot · Data Schema Reference</b><br>
+    PostgreSQL schemas: <code>sync_meta</code> (3 tables) · <code>report</code> (1 table)<br>
+    Field count: <code>table_sync_config</code> (10) · <code>checkpoint</code> (9) · <code>sync_run_log</code> (15) · <code>partners</code> (12)<br>
+    <span style="font-size:12px">Last updated: 2026-07-19</span>
+  </footer>
+</div>
+</body>
+</html>

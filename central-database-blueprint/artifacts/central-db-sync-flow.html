@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Central DB Sync Flow — Implementation & Architecture</title>
+<style>
+  :root {
+    --bg: #0f1420;
+    --panel: #161d2d;
+    --panel-2: #1c2637;
+    --ink: #e8edf6;
+    --muted: #93a1b8;
+    --border: #2a3550;
+    --erp: #ff8a5c;
+    --erp-bg: #2a1c15;
+    --sql: #5cc8ff;
+    --sql-bg: #12222e;
+    --pg: #a98bff;
+    --pg-bg: #211b35;
+    --job: #ffd166;
+    --job-bg: #2c2616;
+    --good: #52d99a;
+    --good-bg: #12251c;
+    --warn: #ffd166;
+    --danger: #ff6b6b;
+    --danger-bg: #2a1515;
+    --code-bg: #0b0f18;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: linear-gradient(180deg, #0d1119 0%, #0f1420 100%);
+    color: var(--ink);
+    font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.5;
+    padding: 32px 20px 80px;
+  }
+  .wrap { max-width: 1140px; margin: 0 auto; }
+  header.page { border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 28px; }
+  h1 { font-size: 25px; margin: 0 0 6px; letter-spacing: .2px; }
+  .sub { color: var(--muted); font-size: 14px; }
+  .path {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px; color: var(--pg); background: var(--code-bg);
+    padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border);
+  }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 22px 0 34px; font-size: 13px; }
+  .legend .item { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 13px; height: 13px; border-radius: 4px; flex: none; }
+  .dot.erp { background: var(--erp); }
+  .dot.sql { background: var(--sql); }
+  .dot.pg { background: var(--pg); }
+  .dot.job { background: var(--job); }
+  .dot.good { background: var(--good); }
+  .dot.danger { background: var(--danger); }
+  .stage { margin-bottom: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px; position: relative; overflow: hidden; }
+  .card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; }
+  .card.erp::before { background: var(--erp); }
+  .card.sql::before { background: var(--sql); }
+  .card.pg::before { background: var(--pg); }
+  .card.job::before { background: var(--job); }
+  .card.good::before { background: var(--good); }
+  .card.danger::before { background: var(--danger); }
+  .card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+  .badge { font-size: 11px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; padding: 3px 9px; border-radius: 20px; border: 1px solid transparent; }
+  .badge.erp { color: var(--erp); background: var(--erp-bg); border-color: #4a2f22; }
+  .badge.sql { color: var(--sql); background: var(--sql-bg); border-color: #1d3a4a; }
+  .badge.pg { color: var(--pg); background: var(--pg-bg); border-color: #40335f; }
+  .badge.job { color: var(--job); background: var(--job-bg); border-color: #4c4224; }
+  .badge.good { color: var(--good); background: var(--good-bg); border-color: #1e4335; }
+  .badge.danger { color: var(--danger); background: var(--danger-bg); border-color: #4a2222; }
+  .step-no { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 2px 7px; }
+  .card h3 { margin: 0; font-size: 16px; font-weight: 650; }
+  .card h4 { margin: 14px 0 6px; font-size: 14px; color: #cdd7e8; }
+  .card p { margin: 8px 0 0; color: #cdd7e8; font-size: 14px; }
+  .card p.note { color: var(--muted); font-size: 13px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; overflow-x: auto; margin: 12px 0 0; font-size: 12px; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; line-height: 1.55; color: #d7e0f0; }
+  pre .k { color: #ff9ecd; }
+  pre .f { color: #8ad6ff; }
+  pre .c { color: #6b7a92; font-style: italic; }
+  pre .s { color: #b7e18a; }
+  pre .err { color: #ff6b6b; }
+  .arrow { display: flex; flex-direction: column; align-items: center; color: var(--muted); margin: 2px 0; }
+  .arrow .stem { width: 2px; height: 16px; background: var(--border); }
+  .arrow .tip { width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 8px solid var(--border); }
+  .arrow .lbl { font-size: 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 20px; padding: 3px 12px; margin-bottom: 4px; color: #b9c6dd; }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .split-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+  @media (max-width: 800px) { .split, .split-3 { grid-template-columns: 1fr; } body { padding: 22px 12px 56px; } }
+  .callout { margin-top: 12px; background: var(--panel-2); border: 1px solid var(--border); border-left: 4px solid var(--warn); border-radius: 8px; padding: 10px 14px; font-size: 13px; color: #d7e0f0; }
+  .callout b { color: var(--warn); }
+  .callout.key { border-left-color: var(--good); }
+  .callout.key b { color: var(--good); }
+  .callout.pg { border-left-color: var(--pg); }
+  .callout.pg b { color: var(--pg); }
+  .callout.danger { border-left-color: var(--danger); }
+  .callout.danger b { color: var(--danger); }
+  .callout.sql { border-left-color: var(--sql); }
+  .callout.sql b { color: var(--sql); }
+  .callout.erp { border-left-color: var(--erp); }
+  .callout.erp b { color: var(--erp); }
+  h2.section { font-size: 18px; margin: 40px 0 16px; padding-left: 12px; border-left: 4px solid var(--pg); }
+  .tag { display: inline-block; font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; margin-left: 4px; }
+  .checks { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 7px; font-size: 13.5px; color: #d7e0f0; }
+  .checks li::before { content: "✓"; color: var(--good); font-weight: 700; margin-right: 9px; }
+  .flow-row { display: flex; align-items: stretch; gap: 10px; margin: 6px 0; flex-wrap: wrap; }
+  .flow-row .box { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; flex: 1; min-width: 140px; font-size: 12.5px; }
+  .flow-row .box b { display: block; margin-bottom: 4px; color: #cdd7e8; }
+  .flow-row .conn { display: flex; align-items: center; color: var(--muted); font-size: 18px; padding: 0 4px; }
+  footer.page { margin-top: 46px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="page">
+    <h1>Central DB Sync Flow — Implementation &amp; Architecture</h1>
+    <div class="sub"><code class="path">Phase 1 Pilot — CRM.Partners</code> · SQL Server ERP → PostgreSQL Central DB · one-way read model</div>
+  </header>
+
+  <div class="legend">
+    <div class="item"><span class="dot erp"></span> ERP SQL Server</div>
+    <div class="item"><span class="dot sql"></span> Change Tracking reader</div>
+    <div class="item"><span class="dot job"></span> Hangfire / application services</div>
+    <div class="item"><span class="dot pg"></span> PostgreSQL Central DB</div>
+    <div class="item"><span class="dot good"></span> Consistency invariant</div>
+    <div class="item"><span class="dot danger"></span> Error / recovery path</div>
+  </div>
+
+  <div class="callout key" style="margin-bottom:28px"><b>Atomic checkpoint invariant.</b> Checkpoint chỉ được advance khi PostgreSQL transaction chứa data changes cũng commit. Không thể có trạng thái "PostgreSQL có data mới nhưng checkpoint chưa update" hoặc ngược lại.</div>
+
+  <h2 class="section">1. System Boundaries</h2>
+
+  <div class="stage"><div class="card erp"><div class="card-head"><span class="step-no">01</span><span class="badge erp">Connection topology</span><h3>4 connection strings chia tách rõ ràng</h3></div>
+  <div class="split-3">
+    <div><div class="callout sql"><b>DefaultConnection</b><br><code class="tag">ERP primary</code><br>Source cho bootstrap + CT reader.<br>Đây là DB duy nhất có Change Tracking.</div></div>
+    <div><div class="callout erp"><b>ErpReplicateConnection</b><br><code class="tag">ERP replica</code><br>Dùng cho CQRS API reads thông thường.<br><b>Không</b> dùng cho sync engine.</div></div>
+    <div><div class="callout pg"><b>CentralDbConnection</b><br><code class="tag">PostgreSQL Central DB</code><br>Target cho sync + <code>sync_meta.*</code> tables.<br>Docker PostgreSQL 16 tại <code>127.0.0.1:5432</code>.</div></div>
+  </div>
+  <p class="note" style="margin-top:10px">ReportingConnection (MSSQL Reporting DB) + AzureRedisCacheUrl không liên quan tới sync engine.</p>
+  </div></div>
+
+  <div class="stage"><div class="card job"><div class="card-head"><span class="step-no">02</span><span class="badge job">Service registration</span><h3>DI wiring trong <code class="tag">CentralDbSyncInfrastructureExtensions</code></h3></div>
+  <div class="split">
+    <div>
+      <p><b>Source readers (MSSQL):</b></p>
+      <ul style="font-size:13px; color:#cdd7e8; margin:6px 0 0; padding-left:18px;">
+        <li><code>IBootstrapSnapshotReader</code> → <code>SqlServerPartnersReader</code></li>
+        <li><code>IFullRefreshReader</code> → <code>SqlServerPartnersReader</code></li>
+        <li><code>IChangeTrackingReader</code> → <code>SqlServerPartnersReader</code></li>
+      </ul>
+    </div>
+    <div>
+      <p><b>Target appliers (PostgreSQL):</b></p>
+      <ul style="font-size:13px; color:#cdd7e8; margin:6px 0 0; padding-left:18px;">
+        <li><code>ISyncBatchApplier</code> → <code>PostgresPartnersWriter</code></li>
+        <li><code>ISyncCheckpointStore</code> → <code>PostgresSyncCheckpointStore</code></li>
+        <li><code>ITableSyncLock</code> → <code>PostgresTableSyncLock</code></li>
+        <li><code>ISyncRunLog</code> → <code>PostgresSyncRunLog</code></li>
+      </ul>
+    </div>
+  </div>
+  <p class="note">Tất cả infrastructure services đều đăng ký <code>AddScoped</code> — mỗi sync cycle tạo scope riêng.</p>
+  </div></div>
+
+  <div class="arrow"><div class="lbl">Hangfire RecurringJob chạy mỗi phút</div><div class="stem"></div><div class="tip"></div></div>
+
+  <h2 class="section">2. Orchestrator Decision Tree</h2>
+
+  <div class="stage"><div class="card job"><div class="card-head"><span class="step-no">03</span><span class="badge job">SyncOrchestrator.ExecuteAsync</span><h3>Điều hướng theo checkpoint status</h3></div>
+  <div class="flow-row">
+    <div class="box"><b>Hangfire Job</b><br><code>RunPilotAsync()</code><br>tạo scope → lấy Orchestrator</div>
+    <div class="conn">→</div>
+    <div class="box"><b>Check dependencies</b><br><code>AreDependenciesReady()</code><br><span class="note">CRM.Partners: không dependency → luôn ready</span></div>
+    <div class="conn">→</div>
+    <div class="box"><b>Read checkpoint</b><br><code>ISyncCheckpointStore.GetAsync()</code></div>
+  </div>
+  <pre><span class="k">if</span> (checkpoint <span class="k">is null</span>
+    || checkpoint.SyncStatus == <span class="s">"pending_initial_sync"</span>
+    || checkpoint.SyncStatus == <span class="s">"requires_full_resync"</span>)
+    → <span class="f">BootstrapSyncService.ExecuteAsync()</span>
+<span class="k">else</span>
+    → <span class="f">ChangeTrackingSyncService.ExecuteAsync()</span></pre>
+
+  <div class="split" style="margin-top:10px">
+    <div><div class="callout key"><b>Bootstrap path.</b> <code>pending_initial_sync</code> (table mới) hoặc <code>requires_full_resync</code> (sau recovery trigger) → full snapshot + full upsert.</div></div>
+    <div><div class="callout sql"><b>CT path.</b> <code>ready</code> → incremental change tracking sync từ checkpoint version tới upper watermark.</div></div>
+  </div>
+  </div></div>
+
+  <div class="arrow"><div class="lbl">bootstrap path</div><div class="stem"></div><div class="tip"></div></div>
+
+  <h2 class="section">3. Bootstrap Flow (Full Snapshot)</h2>
+
+  <div class="stage"><div class="card sql"><div class="card-head"><span class="step-no">04</span><span class="badge sql">BootstrapSyncService</span><h3>Acquire lock → Read snapshot → Apply → Release lock</h3></div>
+  <div class="flow-row">
+    <div class="box"><b>1. Acquire lock</b><br><code>PostgresTableSyncLock</code><br>pg_advisory_lock trên DB</div>
+    <div class="conn">→</div>
+    <div class="box"><b>2. Read snapshot</b><br><code>IBootstrapSnapshotReader</code><br>CT version + full data</div>
+    <div class="conn">→</div>
+    <div class="box"><b>3. Apply to PostgreSQL</b><br><code>PostgresPartnersWriter</code><br>data + checkpoint = 1 transaction</div>
+    <div class="conn">→</div>
+    <div class="box"><b>4. Log + release lock</b><br><code>ISyncRunLog.WriteAsync()</code></div>
+  </div>
+
+  <h4>Snapshot reader implementation detail</h4>
+  <pre><span class="c">-- SqlServerPartnersReader.cs (bootstrap path)</span>
+<span class="c">-- Dùng ReadCommitted + READPAST thay vì Snapshot isolation</span>
+<span class="c">-- để không cần ALLOW_SNAPSHOT_ISOLATION trên DB</span>
+<span class="k">BEGIN TRANSACTION</span>;  <span class="c">-- IsolationLevel.ReadCommitted</span>
+<span class="k">DECLARE</span> @baseline bigint = <span class="f">CHANGE_TRACKING_CURRENT_VERSION</span>();
+<span class="k">SELECT</span> {columns} <span class="k">FROM</span> [dbo].[CRM.Partners] <span class="k">WITH</span> (READPAST);
+<span class="k">DECLARE</span> @version_after bigint = <span class="f">CHANGE_TRACKING_CURRENT_VERSION</span>();
+<span class="c">-- Nếu baseline == version_after → commit, trả snapshot</span>
+<span class="c">-- Nếu khác → rollback, retry (tối đa 3 lần)</span>
+<span class="k">COMMIT TRANSACTION</span>;</pre>
+  <div class="callout key"><b>Verify-before-commit pattern.</b> Đọc CT version → read data → re-check CT version. Nếu version không đổi, dữ liệu nhất quán. Nếu có thay đổi concurrent, rollback và retry. Loại bỏ hoàn toàn nhu cầu Snapshot Isolation trên DB.</div>
+  </div></div>
+
+  <div class="arrow"><div class="lbl">sau bootstrap: checkpoint = ready</div><div class="stem"></div><div class="tip"></div></div>
+
+  <h2 class="section">4. CT Incremental Flow</h2>
+
+  <div class="stage"><div class="card sql"><div class="card-head"><span class="step-no">05</span><span class="badge sql">ChangeTrackingSyncService</span><h3>Validate checkpoint → Read batch → Apply → Advance</h3></div>
+  <div class="flow-row">
+    <div class="box"><b>1. Acquire lock</b><br>pg_advisory_lock</div>
+    <div class="conn">→</div>
+    <div class="box"><b>2. Validate checkpoint</b><br>Check null + ready status + has version</div>
+    <div class="conn">→</div>
+    <div class="box"><b>3. Read ChangeBatch</b><br><code>CHANGETABLE(CHANGES ...)</code></div>
+    <div class="conn">→</div>
+    <div class="box"><b>4. Apply batch</b><br>(retry tối đa 3 lần)</div>
+    <div class="conn">→</div>
+    <div class="box"><b>5. Log + release</b></div>
+  </div>
+
+  <h4>CT reader query</h4>
+  <pre><span class="k">DECLARE</span> @upper bigint = <span class="f">CHANGE_TRACKING_CURRENT_VERSION</span>();
+<span class="k">SELECT</span> CT.SYS_CHANGE_VERSION, CT.SYS_CHANGE_OPERATION,
+       CT.PartnerId, P.*
+<span class="k">FROM</span> <span class="f">CHANGETABLE</span>(CHANGES [dbo].[CRM.Partners], @checkpoint) CT
+<span class="k">LEFT JOIN</span> [dbo].[CRM.Partners] <span class="k">AS</span> P <span class="k">WITH</span> (READPAST)
+    <span class="k">ON</span> P.PartnerId = CT.PartnerId
+<span class="k">WHERE</span> CT.SYS_CHANGE_VERSION &lt;= @upper
+<span class="k">ORDER BY</span> CT.SYS_CHANGE_VERSION, CT.PartnerId;</pre>
+
+  <div class="split" style="margin-top:10px">
+    <div><div class="callout key"><b>No changes optimization.</b> Nếu <code>batch.Rows.Count == 0</code>, chỉ advance checkpoint tới UpperWatermark, không cần PostgreSQL data transaction.</div></div>
+    <div><div class="callout"><b>Apply retry.</b> <code>ApplyWithRetryAsync</code> retry tối đa 3 lần cho transient error (deadlock, timeout, connection). Exponential backoff: 1s → 2s → 4s.</div></div>
+  </div>
+  <h4>Vì sao checkpoint của table không đổi dữ liệu vẫn tăng?</h4>
+  <div class="callout sql">
+    <b><code>CHANGE_TRACKING_CURRENT_VERSION()</code> là database-wide watermark.</b>
+    Nó biểu diễn vị trí hiện tại trên timeline Change Tracking của cả SQL Server database, không phải version riêng của table đang đọc.
+    <code>CHANGETABLE(CHANGES ..., @checkpoint)</code> mới là phần lọc các event thuộc table cụ thể.
+  </div>
+  <pre><span class="c">-- Trạng thái ban đầu</span>
+TableA checkpoint = 100
+TableB checkpoint = 100
+
+<span class="c">-- Chỉ TableA có thay đổi; database-wide CT version tăng thành 101</span>
+TableA: CHANGETABLE(..., 100) → có rows  → checkpoint 101
+TableB: CHANGETABLE(..., 100) → 0 rows  → checkpoint 101, outcome = no_changes</pre>
+  <div class="callout key">
+    <b>Không có mass update checkpoint.</b>
+    Job của mỗi table gọi <code>AdvanceAsync(config.SourceTable, previous, upper)</code> riêng,
+    và PostgreSQL chỉ update row thỏa <code>source_table = @sourceTable</code>.
+    Các table có thể hội tụ về cùng version vì chúng lần lượt xác nhận rằng không còn event của chính mình trước upper watermark đó.
+  </div>
+  </div></div>
+
+  <div class="arrow"><div class="lbl">PostgreSQL atomic apply</div><div class="stem"></div><div class="tip"></div></div>
+
+  <h2 class="section">5. PostgreSQL Apply Engine</h2>
+
+  <div class="stage"><div class="card pg"><div class="card-head"><span class="step-no">06</span><span class="badge pg">PostgresPartnersWriter</span><h3>1 transaction — data changes + checkpoint advance</h3></div>
+
+  <div class="split">
+    <div>
+      <p><b>Bootstrap apply (<code>ApplyBootstrapAsync</code>):</b></p>
+      <pre><span class="c">-- 1 transaction:</span>
+<span class="k">BEGIN</span>;
+<span class="c">-- Upsert tất cả rows từ snapshot</span>
+<span class="k">INSERT INTO</span> report.partners (...)
+<span class="k">VALUES</span> (...) <span class="k">ON CONFLICT</span> (partner_id)
+    <span class="k">DO UPDATE SET</span> name = EXCLUDED.name, ...;
+
+<span class="c">-- Deactivate rows không còn trong snapshot</span>
+<span class="k">UPDATE</span> report.partners <span class="k">SET</span> is_active = <span class="k">false</span>
+<span class="k">WHERE</span> partner_id <span class="k">NOT IN</span> (...snapshotPks...);
+
+<span class="c">-- Set checkpoint = baseline version</span>
+<span class="k">INSERT INTO</span> sync_meta.checkpoint (...)
+<span class="k">VALUES</span> (...) <span class="k">ON CONFLICT</span> (source_table)
+    <span class="k">DO UPDATE SET</span> last_sync_version = @version,
+                  sync_status = <span class="s">'ready'</span>;
+<span class="k">COMMIT</span>;</pre>
+    </div>
+    <div>
+      <p><b>CT apply (<code>ApplyBatchAsync</code>):</b></p>
+      <pre><span class="c">-- 1 transaction:</span>
+<span class="k">BEGIN</span>;
+<span class="c">-- Với mỗi changed row:</span>
+<span class="c">--   'D' → DELETE FROM report.partners WHERE partner_id = @id</span>
+<span class="c">--   'I'/'U' → INSERT ... ON CONFLICT DO UPDATE</span>
+
+<span class="c">-- Advance checkpoint</span>
+<span class="k">UPDATE</span> sync_meta.checkpoint
+<span class="k">SET</span> last_sync_version = @upper_watermark,
+    last_success_at = NOW(),
+    consecutive_failure_count = 0
+<span class="k">WHERE</span> source_table = @source_table
+  <span class="k">AND</span> last_sync_version = @previous_version;
+<span class="k">COMMIT</span>;</pre>
+    </div>
+  </div>
+
+  <div class="callout key"><b>Optimistic concurrency checkpoint.</b> Update checkpoint với <code>WHERE last_sync_version = @previous_version</code>. Nếu 0 rows affected (race condition), rollback toàn bộ transaction. Đảm bảo at-most-once semantics: retry sẽ re-read changes từ version cũ.</div>
+  </div></div>
+
+  <div class="arrow"><div class="lbl">recovery path</div><div class="stem"></div><div class="tip"></div></div>
+
+  <h2 class="section">6. Recovery Path</h2>
+
+  <div class="stage"><div class="card danger"><div class="card-head"><span class="step-no">07</span><span class="badge danger">CheckpointInvalidException</span><h3>CT retention hết hạn — full resync immediate recovery</h3></div>
+  <div class="flow-row">
+    <div class="box"><b>CT read</b><br><code>ReadBatchAsync()</code></div>
+    <div class="conn">→</div>
+    <div class="box" style="border-color:var(--danger)"><b>CheckpointInvalid</b><br><code>min_valid &gt; checkpoint</code></div>
+    <div class="conn">→</div>
+    <div class="box"><b>Transition state</b><br><code>TransitionToFullResyncAsync()</code></div>
+    <div class="conn">→</div>
+    <div class="box"><b>Bootstrap recovery</b><br><code>ExecuteWithProvidedLockAsync()</code></div>
+  </div>
+
+  <div class="callout key"><b>Lock ownership.</b> Bootstrap recovery chạy <b>trong cùng lock handle</b> không release → re-acquire. Nếu release rồi acquire lại, worker khác có thể lấy lock ở giữa và gây conflict.</div>
+
+  <h4 style="margin-top:14px">Error states được xử lý:</h4>
+  <div class="split-3">
+    <div><div class="callout danger"><b>CT Sync Failed</b><br>(syntax error, connection loss, etc.)<br>→ Trả về <code>SyncRunResult.Failed</code><br>→ Không advance checkpoint<br>→ Retry ở cycle sau</div></div>
+    <div><div class="callout danger"><b>Bootstrap Failed</b><br>(snapshot isolation, lock wait, etc.)<br>→ <code>TransitionToFullResyncAsync()</code><br>→ Log + checkpoint error metadata<br>→ Retry = full resync</div></div>
+    <div><div class="callout"><b>Apply retry exhausted</b><br>(3 lần transient error)<br>→ <code>outcome: failed</code><br>→ error_code: ApplyRetriesExhausted<br>→ Next CT cycle retry tự nhiên</div></div>
+  </div>
+  </div></div>
+
+  <div class="arrow"><div class="lbl">observability & data model</div><div class="stem"></div><div class="tip"></div></div>
+
+  <h2 class="section">7. Observability & Data Model</h2>
+
+  <div class="split">
+    <div class="stage"><div class="card pg"><div class="card-head"><span class="step-no">08</span><span class="badge pg">sync_meta tables (PostgreSQL)</span><h3>3 tables quản lý sync engine</h3></div>
+      <p><b><code>sync_meta.table_sync_config</code></b><br>Registry: source_table, target, sync_mode (ChangeTracking/FullRefresh), tier (Hot/Cold), dependency, interval, lag, enabled.</p>
+      <div class="callout" style="margin-top:8px"><b>⚠️ Dead data — documentation only.</b> Hiện tại <b>không có C# code nào đọc</b> từ <code>table_sync_config</code>. Config được hardcode ở <code>CentralDbSyncJobs</code> và <code>CentralDbSyncController</code>. Xem <code>docs/notes/2026-07-19-config-read-gap.md</code>.</div>
+      <p style="margin-top:12px"><b><code>sync_meta.checkpoint</code></b><br>Per-table: last_sync_version, sync_status (pending_initial_sync / ready / requires_full_resync), timestamps, error metadata.</p>
+      <p style="margin-top:8px"><b><code>sync_meta.sync_run_log</code></b><br>Append-only audit: run_id, mode (Bootstrap/ChangeTracking/Orchestrator), outcome, row counts, checkpoint range, duration, error.</p>
+    </div></div>
+    <div class="stage"><div class="card good"><div class="card-head"><span class="step-no">09</span><span class="badge good">Lock & Health</span><h3>Per-table advisory lock + health endpoint</h3></div>
+      <p><b><code>PostgresTableSyncLock</code></b><br>Sử dụng <code>pg_advisory_xact_lock</code> với hash từ source_table name. Lock tự động release khi transaction kết thúc.</p>
+      <p style="margin-top:8px"><b><code>GET /api/central-db-sync/health/{sourceTable}</code></b><br>Return: status <code>0 (Healthy)</code> nếu sync gần đây và lag &lt; maxAllowedLag. status <code>1 (Degraded)</code> nếu quá hạn hoặc có lỗi. status <code>2 (Unknown)</code> nếu table không tồn tại.</p>
+    </div></div>
+  </div>
+
+  <div class="arrow"><div class="lbl">kiến trúc tổng thể</div><div class="stem"></div><div class="tip"></div></div>
+
+  <h2 class="section">8. Deployment & Config</h2>
+
+  <div class="stage"><div class="card job"><div class="card-head"><span class="step-no">10</span><span class="badge job">Azure Pipelines + AppSettings</span><h3>CentralDbConnection chỉ deploy ở ERP Reporting stage</h3></div>
+  <div class="split">
+    <div>
+      <p><b>Azure DevOps pipeline:</b></p>
+      <ul style="font-size:13px; color:#cdd7e8; margin:6px 0 0; padding-left:18px;">
+        <li>Shared template <code>deploy.yml</code> — không chứa CentralDbConnection</li>
+        <li>ERP Reporting stage — riêng lẻ thêm CentralDbConnection vào <code>appSettings</code></li>
+        <li>Các stage khác (UAT, PROD) không bị ảnh hưởng</li>
+      </ul>
+    </div>
+    <div>
+      <p><b>AppSettings:</b></p>
+      <pre>{
+  "DatabaseSettings": {
+    "CentralDbConnection":
+      "Host=127.0.0.1;Port=5432;...",
+    "DefaultConnection":
+      "Server=...;Database=UA-DEV-..."
+  }
+}</pre>
+    </div>
+  </div>
+  <div class="callout"><b>Note:</b> Hiện tại <code>CentralDbConnection</code> chỉ cấu hình trong Development và Reporting.</div>
+  </div></div>
+
+  <div class="stage"><div class="card good"><div class="card-head"><span class="step-no">11</span><span class="badge good">SQL Scripts</span><h3>3 scripts — idempotent, deploy theo thứ tự</h3></div>
+  <div class="split-3">
+    <div><div class="callout pg"><b>001-central-db-sync-schema.sql</b><br>CREATE SCHEMA + CREATE TABLE IF NOT EXISTS cho sync_meta + report.partners.</div></div>
+    <div><div class="callout job"><b>002-central-db-sync-seed.sql</b><br>INSERT ... ON CONFLICT DO NOTHING — register CRM.Partners + initial checkpoint.</div></div>
+    <div><div class="callout danger"><b>003-enable-crm-partners-change-tracking.sql</b><br>⚠ DBA script — chạy thủ công trên SQL Server. Enable CT DB-level + table-level + GRANT.</div></div>
+  </div>
+  </div></div>
+
+  <h2 class="section">9. Design Decisions & Deviations</h2>
+
+  <div class="stage"><div class="card"><div class="card-head"><span class="step-no">D1</span><span class="badge good">Snapshot Isolation → READPAST</span></div><p><b>Vấn đề:</b> Code gốc dùng <code>IsolationLevel.Snapshot</code>, yêu cầu <code>ALTER DATABASE SET ALLOW_SNAPSHOT_ISOLATION ON</code> trên MSSQL dev DB dùng chung. Team ngại ảnh hưởng các bảng khác.</p><p class="note"><b>Quyết định:</b> Không bật Snapshot Isolation. Thay bằng <code>ReadCommitted + READPAST</code> + verify-before-commit retry (tối đa 3 lần). Xem <code>docs/notes/2026-07-19-snapshot-isolation-decision.md</code>.</p></div></div>
+
+  <div class="stage"><div class="card"><div class="card-head"><span class="step-no">D2</span><span class="badge">Admin role guard</span></div><p><b>Vấn đề:</b> <code>POST /bootstrap</code> yêu cầu <code>HttpContext.User.IsInRole(AppConst.Admin)</code>. Test account <code>manager@ua</code> không có Admin role.</p><p class="note"><b>Quyết định:</b> Tạm comment check để unblock testing. TODO re-enable trước UAT. Xem <code>docs/notes/2026-07-19-admin-role-bypass.md</code>.</p></div></div>
+
+  <div class="stage"><div class="card"><div class="card-head"><span class="step-no">D3</span><span class="badge good">CT Retention Recovery</span></div><p>Nếu sync downtime quá 2 ngày, checkpoint <code>last_sync_version</code> &lt; <code>CHANGE_TRACKING_MIN_VALID_VERSION</code> → CheckpointInvalidException → tự động full resync recovery với <code>ExecuteWithProvidedLockAsync</code> giữ nguyên lock handle. Đây là behavior mong muốn.</p></div></div>
+
+  <footer class="page">
+    <b>Phase 1 Pilot — Central DB Sync</b><br>
+    Source: <code>[dbo].[CRM.Partners]</code> → <code>report.partners</code> · 348 rows · <code>ChangeTracking</code> incremental sync<br>
+    Services: <code>BootstrapSyncService</code> + <code>ChangeTrackingSyncService</code> + <code>SyncOrchestrator</code> · PostgreSQL 16 · Hangfire scheduling<br>
+    Manual test: 2026-07-19 · All tests passed.
+  </footer>
+</div>
+</body>
+</html>

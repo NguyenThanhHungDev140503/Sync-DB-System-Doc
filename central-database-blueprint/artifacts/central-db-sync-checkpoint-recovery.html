@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Central DB Sync — Checkpoint & Recovery Analysis</title>
+<style>
+  :root {
+    --bg: #0f1420;
+    --panel: #161d2d;
+    --panel-2: #1c2637;
+    --ink: #e8edf6;
+    --muted: #93a1b8;
+    --border: #2a3550;
+    --sql: #5cc8ff;
+    --sql-bg: #12222e;
+    --pg: #a98bff;
+    --pg-bg: #211b35;
+    --good: #52d99a;
+    --good-bg: #12251c;
+    --warn: #ffd166;
+    --warn-bg: #2c2616;
+    --danger: #ff6b6b;
+    --danger-bg: #2a1515;
+    --code-bg: #0b0f18;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: linear-gradient(180deg, #0d1119 0%, #0f1420 100%);
+    color: var(--ink);
+    font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.5;
+    padding: 32px 20px 80px;
+  }
+  .wrap { max-width: 1140px; margin: 0 auto; }
+  header.page { border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 28px; }
+  h1 { font-size: 25px; margin: 0 0 6px; letter-spacing: .2px; }
+  .sub { color: var(--muted); font-size: 14px; }
+  .path {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px; color: var(--pg); background: var(--code-bg);
+    padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border);
+  }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 22px 0 34px; font-size: 13px; }
+  .legend .item { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 13px; height: 13px; border-radius: 4px; flex: none; }
+  .dot.good { background: var(--good); }
+  .dot.warn { background: var(--warn); }
+  .dot.danger { background: var(--danger); }
+  .dot.sql { background: var(--sql); }
+  .dot.pg { background: var(--pg); }
+  h2.section { font-size: 18px; margin: 40px 0 16px; padding-left: 12px; border-left: 4px solid var(--pg); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px; margin-bottom: 24px; overflow: hidden; }
+  .card h3 { margin: 0 0 6px; font-size: 16px; font-weight: 650; }
+  .card h4 { margin: 16px 0 6px; font-size: 14px; color: #cdd7e8; }
+  .card p { margin: 6px 0 0; color: #cdd7e8; font-size: 14px; }
+  .card p.note { color: var(--muted); font-size: 13px; }
+  .badge {
+    font-size: 11px; font-weight: 700; letter-spacing: .6px;
+    text-transform: uppercase; padding: 3px 9px; border-radius: 20px;
+    border: 1px solid transparent; display: inline-block;
+  }
+  .badge.good { color: var(--good); background: var(--good-bg); border-color: #1e4335; }
+  .badge.warn { color: var(--warn); background: var(--warn-bg); border-color: #4c4224; }
+  .badge.danger { color: var(--danger); background: var(--danger-bg); border-color: #4a2222; }
+  .badge.sql { color: var(--sql); background: var(--sql-bg); border-color: #1d3a4a; }
+  .badge.pg { color: var(--pg); background: var(--pg-bg); border-color: #40335f; }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px; overflow-x: auto; margin: 10px 0 0;
+    font-size: 12px; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    line-height: 1.55; color: #d7e0f0;
+  }
+  pre .k { color: #ff9ecd; }
+  pre .f { color: #8ad6ff; }
+  pre .c { color: #6b7a92; font-style: italic; }
+  pre .s { color: #b7e18a; }
+  pre .dim { color: #4a5a78; }
+  pre .err { color: #ff6b6b; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 0; font-size: 13px; }
+  table th, table td { text-align: left; padding: 8px 10px; border: 1px solid var(--border); vertical-align: top; }
+  table th { background: var(--panel-2); color: #9aadcc; font-weight: 600; white-space: nowrap; }
+  table td { color: #cdd7e8; }
+  table td code { font-size: 12px; }
+  .callout {
+    background: var(--panel-2); border: 1px solid var(--border); border-left: 4px solid var(--warn);
+    border-radius: 8px; padding: 10px 14px; font-size: 13px; color: #d7e0f0; margin-top: 10px;
+  }
+  .callout b { color: var(--warn); }
+  .callout.key { border-left-color: var(--good); }
+  .callout.key b { color: var(--good); }
+  .callout.danger { border-left-color: var(--danger); }
+  .callout.danger b { color: var(--danger); }
+  .callout.pg { border-left-color: var(--pg); }
+  .callout.pg b { color: var(--pg); }
+  .callout.sql { border-left-color: var(--sql); }
+  .callout.sql b { color: var(--sql); }
+  .flow-box {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px; margin-top: 10px; font-size: 13px; line-height: 1.6;
+  }
+  .flow-box .step { color: var(--sql); font-weight: 600; }
+  .flow-box .arrow { color: var(--muted); }
+  .flow-box .table-ref { color: var(--pg); font-weight: 600; }
+  .flow-box .good { color: var(--good); }
+  .flow-box .err { color: var(--danger); }
+  .flow-box .note { color: var(--muted); font-style: italic; }
+  .state-box {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 12px 0;
+  }
+  .state {
+    background: var(--code-bg); border: 2px solid var(--border); border-radius: 10px;
+    padding: 10px 16px; font-size: 12.5px; font-family: ui-monospace, monospace;
+    text-align: center; min-width: 110px;
+  }
+  .state.pending { border-color: var(--warn); color: var(--warn); }
+  .state.ready { border-color: var(--good); color: var(--good); }
+  .state.error { border-color: var(--danger); color: var(--danger); }
+  .state.arrow { border: none; background: transparent; padding: 0; min-width: auto; font-size: 18px; color: var(--muted); }
+  footer.page { margin-top: 46px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
+  .files-list { margin: 10px 0 0; padding: 0; list-style: none; font-size: 12.5px; }
+  .files-list li { padding: 3px 0; color: #b9c6dd; }
+  .files-list li code { color: #cdd7e8; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="page">
+    <h1>Central DB Sync — Checkpoint &amp; Recovery Analysis</h1>
+    <div class="sub"><code class="path">Phân tích chi tiết: khi checkpoint hỏng, engine xử lý thế nào</code> · 4 kịch bản + cơ chế same-lock recovery</div>
+  </header>
+
+  <div class="legend">
+    <div class="item"><span class="dot good"></span> Normal path — sync thành công</div>
+    <div class="item"><span class="dot warn"></span> Recovery path — checkpoint invalid, tự động phục hồi</div>
+    <div class="item"><span class="dot danger"></span> Error path — sync thất bại, cần alert</div>
+    <div class="item"><span class="dot sql"></span> MSSQL Change Tracking</div>
+    <div class="item"><span class="dot pg"></span> PostgreSQL checkpoint</div>
+  </div>
+
+  <div class="callout key" style="margin-bottom:24px">
+    <b>Nguyên tắc cốt lõi:</b> Checkpoint là single source of truth cho trạng thái sync engine.
+    Mọi kịch bản checkpoint hỏng đều dẫn về Bootstrap (full sync) để tự phục hồi.
+    Engine không bao giờ stuck — luôn có đường thoát.
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">I. Tổng quan — Checkpoint và các trạng thái</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <p>Checkpoint có <b>3 trạng thái</b> được định nghĩa bởi CHECK constraint trên SQL:</p>
+    <div class="state-box" style="justify-content:center;">
+      <div class="state pending">pending_initial_sync</div>
+      <div class="state arrow">→</div>
+      <div class="state ready">ready</div>
+      <div class="state arrow">→</div>
+      <div class="state error">requires_full_resync</div>
+      <div class="state arrow">→</div>
+      <div class="state ready">ready</div>
+    </div>
+
+    <table>
+      <tr><th>Trạng thái</th><th>Ý nghĩa</th><th>Mô tả</th><th>Được set bởi</th></tr>
+      <tr>
+        <td><code>pending_initial_sync</code></td>
+        <td>Chưa sync lần nào</td>
+        <td>Checkpoint mới seed, <code>last_sync_version = NULL</code>, chưa có dữ liệu trên PostgreSQL</td>
+        <td>Seed SQL (<code>002-central-db-sync-seed.sql</code>)</td>
+      </tr>
+      <tr>
+        <td><code>ready</code></td>
+        <td>Sẵn sàng cho CT incremental</td>
+        <td>Đã có baseline dữ liệu, version hợp lệ. CT sync chạy bình thường</td>
+        <td><code>PostgresPartnersWriter</code> (bootstrap success)<br><code>PostgresSyncCheckpointStore</code> (after CT advance)</td>
+      </tr>
+      <tr>
+        <td><code>requires_full_resync</code></td>
+        <td>Cần bootstrap lại</td>
+        <td>Sync trước thất bại — checkpoint lưu error metadata để debug</td>
+        <td><code>TransitionToFullResyncAsync()</code></td>
+      </tr>
+    </table>
+
+    <h4>Các field liên quan trong <code>sync_meta.checkpoint</code>:</h4>
+    <table>
+      <tr><th>Field</th><th>Vai trò trong recovery</th></tr>
+      <tr><td><code>last_sync_version</code></td><td>Baseline cho CT query. NULL → không thể chạy CT. &lt; MIN_VALID_VERSION → CheckpointInvalidException</td></tr>
+      <tr><td><code>sync_status</code></td><td>State machine: <code>pending_initial_sync</code> → <code>ready</code> → <code>requires_full_resync</code> → <code>ready</code></td></tr>
+      <tr><td><code>consecutive_failure_count</code></td><td>Degraded detection: &gt; 0 → health endpoint trả về Degraded (dù status có thể vẫn <code>ready</code>)</td></tr>
+      <tr><td><code>last_error_code</code></td><td>VD: <code>CheckpointInvalid</code>, <code>BootstrapFailed</code>, <code>ApplyRetriesExhausted</code>, <code>CONCURRENT_CHECKPOINT</code></td></tr>
+      <tr><td><code>last_error_message</code></td><td>Full exception message để debug</td></tr>
+    </table>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">II. Trường hợp trông bất thường nhưng không phải checkpoint hỏng</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge good">Expected behavior</span>
+      <h3 style="margin:0">Nhiều table cùng tăng <code>last_sync_version</code></h3>
+    </div>
+    <p class="note" style="margin-top:6px">
+      Ví dụ: chỉ <code>TableA</code> có DML nhưng sau một sync cycle, checkpoint của
+      <code>TableA</code>, <code>TableB</code> và <code>TableC</code> đều tăng từ <code>100</code> lên <code>101</code>.
+      Đây là behavior bình thường của SQL Server Change Tracking.
+    </p>
+
+    <h4>Nguyên nhân:</h4>
+    <div class="flow-box">
+      <span class="step">CHANGE_TRACKING_CURRENT_VERSION()</span>
+      <span class="arrow">→</span> trả về current version của <b>toàn database</b><br>
+      <span class="step">CHANGETABLE(CHANGES TableX, @checkpoint)</span>
+      <span class="arrow">→</span> chỉ trả event của <b>TableX</b><br>
+      <span class="step">ChangeTrackingSyncService</span>
+      <span class="arrow">→</span> nếu 0 rows, vẫn gọi <b>AdvanceAsync</b> tới upper watermark
+    </div>
+
+    <pre><span class="c">-- Current checkpoint của cả hai table</span>
+TableA = 100
+TableB = 100
+
+<span class="c">-- Một thay đổi trên TableA làm database-wide watermark thành 101</span>
+Read TableA: events (100, 101] = 1 row → apply row → TableA checkpoint = 101
+Read TableB: events (100, 101] = 0 row → no_changes → TableB checkpoint = 101</pre>
+
+    <div class="callout key">
+      <b>Ý nghĩa chính xác của checkpoint:</b>
+      <code>TableB.last_sync_version = 101</code> không nói rằng TableB đã thay đổi ở version 101.
+      Nó nói rằng sync engine đã kiểm tra TableB và xác nhận không còn CT event nào của TableB trong khoảng
+      <code>(100, 101]</code>. Lần chạy sau có thể bắt đầu từ 101 mà không quét lại khoảng rỗng này.
+    </div>
+
+    <h4>Điều gì không xảy ra:</h4>
+    <table>
+      <tr><th>Nghi ngờ</th><th>Thực tế</th></tr>
+      <tr>
+        <td>Một thay đổi trên TableA chạy SQL update tất cả checkpoint</td>
+        <td>Không. Mỗi job chỉ update row có <code>source_table = @sourceTable</code>.</td>
+      </tr>
+      <tr>
+        <td>Checkpoint tăng khi không có row nghĩa là mất change</td>
+        <td>Không. <code>CHANGETABLE</code> đã kiểm tra riêng table đó tới upper watermark trước khi advance.</td>
+      </tr>
+      <tr>
+        <td>Các checkpoint phải có version sequence độc lập</td>
+        <td>Không. Chúng là cursor riêng theo table nhưng cùng tham chiếu một timeline version cấp database.</td>
+      </tr>
+    </table>
+
+    <div class="callout warn">
+      <b>Chỉ cần điều tra khi:</b> checkpoint của một table thay đổi mà không có sync run tương ứng;
+      câu update thiếu filter <code>source_table</code>; checkpoint đi lùi; hoặc job advance qua upper watermark
+      mà chưa query <code>CHANGETABLE</code> thành công. Việc nhiều table hội tụ về cùng version, tự nó, không phải lỗi.
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">III. 4 kịch bản checkpoint hỏng</h2>
+  <!-- ================================================================ -->
+
+  <!-- 2.1 -->
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge warn">Scenario 1</span>
+      <h3 style="margin:0">Checkpoint null / chưa ready</h3>
+    </div>
+    <p class="note" style="margin-top:6px"><b>Xảy ra khi:</b> seed lần đầu, checkpoint bị xóa tay, hoặc bootstrap trước set status = <code>requires_full_resync</code></p>
+
+    <h4>Luồng xử lý:</h4>
+    <div class="flow-box">
+      <span class="step">SyncOrchestrator.ExecuteAsync()</span> <span class="arrow">→</span> gọi <span class="table-ref">checkpointStore.GetAsync()</span><br>
+      <span class="step">Decision tree</span> (dòng 58-62 <code>SyncOrchestrator.cs</code>):
+      <pre style="margin-top:6px"><span class="k">if</span> (checkpoint <span class="k">is null</span>
+    || checkpoint.SyncStatus == <span class="s">"pending_initial_sync"</span>
+    || checkpoint.SyncStatus == <span class="s">"requires_full_resync"</span>)
+    → <span class="f">BootstrapSyncService.ExecuteAsync()</span>
+<span class="k">else</span>
+    → <span class="f">ChangeTrackingSyncService.ExecuteAsync()</span></pre>
+    </div>
+
+    <h4>Chi tiết bootstrap path:</h4>
+    <div class="flow-box">
+      <span class="good">BootstrapSyncService.ExecuteAsync()</span>
+      <div style="padding-left:16px;margin-top:4px">
+        1. Acquire advisory lock (<code>pg_try_advisory_lock</code>)<br>
+        2. <span class="step">IBootstrapSnapshotReader.ReadAsync()</span> → đọc full snapshot từ MSSQL + CT baseline version<br>
+        3. <span class="step">ISyncBatchApplier.ApplyBootstrapAsync()</span> → 1 PostgreSQL transaction:<br>
+        <div style="padding-left:16px">
+          • Upsert tất cả rows từ snapshot<br>
+          • Deactivate orphan rows (không còn trong snapshot)<br>
+          • <b>UPDATE checkpoint: set status = 'ready', version = baselineVersion</b>
+        </div>
+        4. <span class="step">ISyncRunLog.WriteAsync()</span> → ghi log (NGOÀI transaction apply)<br>
+        5. Lock handle disposed → tự động unlock
+      </div>
+      <div class="note" style="margin-top:6px">📍 Atomic checkpoint invariant: step 3 là 1 transaction — data và checkpoint luôn consistent.</div>
+    </div>
+
+    <div class="callout key"><b>Kết quả:</b> Checkpoint thành <code>ready</code>, <code>last_sync_version</code> có giá trị. CT incremental có thể chạy ở cycle sau.</div>
+  </div>
+
+  <!-- 2.2 -->
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge sql">Scenario 2</span>
+      <h3 style="margin:0">CT retention hết hạn — CheckpointInvalidException</h3>
+    </div>
+    <p class="note" style="margin-top:6px"><b>Xảy ra khi:</b> Sync downtime &gt; 2 ngày (SQL Server CT retention default).<br>
+    <code>CHANGE_TRACKING_MIN_VALID_VERSION(object_id) &gt; checkpoint.last_sync_version</code> → MSSQL không còn dữ liệu CT cũ.</p>
+
+    <h4>Đây là kịch bản phức tạp nhất — cơ chế <b>same-lock recovery</b>:</h4>
+    <div class="flow-box">
+      <span class="step">SyncOrchestrator</span> → checkpoint <span class="good">ready</span> → gọi <span class="step">ChangeTrackingSyncService.ExecuteAsync()</span>
+      <div style="padding-left:16px;margin-top:4px">
+        │
+        ├─ <span class="good">1. Acquire advisory lock</span> (pg_try_advisory_lock)<br>
+        ├─ 2. Validate checkpoint: <span class="good">ready</span> + has version <span class="good">✓</span><br>
+        ├─ 3. <span class="step">reader.ReadBatchAsync()</span> → MSSQL CT query<br>
+        │     └─ <span class="err">CHANGE_TRACKING_MIN_VALID_VERSION &gt; checkpoint</span><br>
+        │        → throw <span class="err">CheckpointInvalidException</span><br>
+        │<br>
+        ├─ <span class="warn">4. catch (CheckpointInvalidException)</span><br>
+        │     ├─ <span class="step">checkpointStore.TransitionToFullResyncAsync()</span><br>
+        │     │    UPDATE checkpoint SET<br>
+        │     │      sync_status = 'requires_full_resync'<br>
+        │     │      consecutive_failure_count++,<br>
+        │     │      last_error_code = 'CheckpointInvalid'<br>
+        │     │      last_attempt_at = NOW()<br>
+        │     │      last_failure_at = NOW()<br>
+        │     │<br>
+        │     └─ <span class="step">bootstrapService.ExecuteWithProvidedLockAsync()</span><br>
+        │          <span class="note">← KHÔNG acquire lock mới — chạy bootstrap core</span><br>
+        │          <span class="note">  với lock handle đã acquire từ bước 1</span><br>
+        │<br>
+        └─ <span class="good">5. await using lockHandle → Dispose → unlock</span>
+      </div>
+    </div>
+
+    <div class="callout key" style="margin-top:12px"><b>Tại sao phải giữ lock xuyên suốt?</b><br>
+    Nếu <code>ChangeTrackingSyncService</code> release lock ở bước 4 rồi acquire lại, worker khác có thể lấy lock ở giữa và bắt đầu sync table này. Khi worker hiện tại acquire lại, nó sẽ conflict với worker kia. <code>ExecuteWithProvidedLockAsync</code> giải quyết vấn đề này bằng cách dùng lại lock handle đã có.</div>
+
+    <div class="callout danger"><b>Lưu ý:</b> TransitionToFullResyncAsync set trạng thái error TRƯỚC khi bootstrap recovery chạy. Nếu recovery thành công, checkpoint được set lại <code>ready</code>. Nếu recovery thất bại, checkpoint giữ nguyên <code>requires_full_resync</code> → cycle sau SyncOrchestrator thấy error → gọi Bootstrap lại.</div>
+
+    <h4>Source code — flow chính (ChangeTrackingSyncService.cs dòng 84-99):</h4>
+    <pre><span class="k">catch</span> (CheckpointInvalidException)
+{
+    logger.LogWarning(<span class="s">"Checkpoint invalid for {SourceTable}"</span>);
+    <span class="k">await</span> checkpointStore.TransitionToFullResyncAsync(
+        config.SourceTable, <span class="s">"CheckpointInvalid"</span>,
+        <span class="s">"CT checkpoint is below minimum valid version"</span>, ct);
+
+    <span class="k">return await</span> bootstrapService.ExecuteWithProvidedLockAsync(
+        config, startedAt, ct);
+}</pre>
+  </div>
+
+  <!-- 2.3 -->
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge warn">Scenario 3</span>
+      <h3 style="margin:0">Optimistic concurrency conflict — ConcurrentCheckpoint</h3>
+    </div>
+    <p class="note" style="margin-top:6px"><b>Xảy ra khi:</b> 2 worker cùng apply batch và cùng advance checkpoint (dù advisory lock đã ngăn, guard vẫn tồn tại để đề phòng key collision hoặc lock hết hạn bất thường).</p>
+
+    <h4>Luồng:</h4>
+    <div class="flow-box">
+      <span class="step">PostgresPartnersWriter.ApplyBatchAsync()</span>
+      <div style="padding-left:16px;margin-top:4px">
+        │<br>
+        ├─ UPDATE sync_meta.checkpoint SET version = @next<br>
+        │  <b>WHERE source_table = @t AND last_sync_version = @previousCheckpoint</b><br>
+        │<br>
+        ├─ <span class="good">affected &gt; 0</span> → COMMIT, return succeeded<br>
+        │<br>
+        └─ <span class="warn">affected == 0</span> → ROLLBACK, return <b>RequiresFullResync</b><br>
+           <span class="note">(có thể kèm error_code = CONCURRENT_CHECKPOINT)</span>
+      </div>
+    </div>
+
+    <div class="flow-box" style="margin-top:10px">
+      <span class="step">ChangeTrackingSyncService</span> nhận outcome = RequiresFullResync (dòng 145-152):
+      <pre style="margin-top:6px"><span class="k">if</span> (result.Outcome == SyncStatus.Outcome.RequiresFullResync)
+{
+    <span class="k">await</span> checkpointStore.TransitionToFullResyncAsync(
+        sourceTable, result.ErrorCode, result.ErrorMessage, ct);
+}</pre>
+      <span class="note">→ Cycle sau: SyncOrchestrator thấy requires_full_resync → gọi Bootstrap</span>
+    </div>
+
+    <div class="callout"><b>Giải thích optimistic guard:</b> <code>WHERE last_sync_version = @previousCheckpoint</code> là cơ chế phòng ngừa. Advisory lock ngăn 2 worker sync cùng lúc, nhưng nếu có lỗi lock (session timeout, unexpected release), guard này đảm bảo at-most-once semantics: nếu worker B đã advance checkpoint trước, worker A không thể ghi đè. Data vẫn consistent — chỉ bị "miss" 1 cycle sync, tự hồi phục ở cycle sau.</div>
+  </div>
+
+  <!-- 2.4 -->
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge danger">Scenario 4</span>
+      <h3 style="margin:0">Bootstrap chính nó bị fail</h3>
+    </div>
+    <p class="note" style="margin-top:6px"><b>Xảy ra khi:</b> MSSQL snapshot lỗi, network timeout, PostgreSQL connection loss, transient exception.</p>
+
+    <h4>Luồng:</h4>
+    <div class="flow-box">
+      <span class="step">BootstrapSyncService.ExecuteCoreAsync()</span>
+      <div style="padding-left:16px;margin-top:4px">
+        │<br>
+        ├─ try: reader.ReadAsync() → applier.ApplyBootstrapAsync()<br>
+        │<br>
+        └─ <span class="err">catch (Exception ex):</span>
+      </div>
+    </div>
+
+    <pre><span class="k">catch</span> (Exception ex)
+{
+    <span class="c">// Ghi error metadata vào checkpoint</span>
+    <span class="k">await</span> checkpointStore.TransitionToFullResyncAsync(
+        config.SourceTable, <span class="s">"BootstrapFailed"</span>, ex.Message, CancellationToken.None);
+
+    <span class="c">// Ghi audit log</span>
+    <span class="k">await</span> runLog.WriteAsync(CreateFailedEntry(...));
+
+    <span class="k">return</span> <span class="k">new</span> SyncRunResult
+    {
+        Outcome = SyncStatus.Outcome.Failed,
+        ErrorCode = <span class="s">"BootstrapFailed"</span>,
+        ErrorMessage = ex.Message
+    };
+}</pre>
+
+    <h4>Hậu quả và tự phục hồi:</h4>
+    <div class="flow-box">
+      <span class="step">Current cycle</span><br>
+      <div style="padding-left:16px;margin-top:4px">
+        • Checkpoint: <code>requires_full_resync</code><br>
+        • <code>consecutive_failure_count</code> + 1<br>
+        • <code>last_error_code</code> = 'BootstrapFailed'<br>
+        • <code>sync_run_log</code>: outcome = failed, errorCode = BootstrapFailed
+      </div>
+      <br>
+      <span class="step">Next cycle (1 phút sau)</span><br>
+      <div style="padding-left:16px;margin-top:4px">
+        • <span class="step">SyncOrchestrator</span> đọc checkpoint → <code>requires_full_resync</code> → Bootstrap lại<br>
+        • <span class="good">Nếu thành công</span> → checkpoint = ready, failure_count reset về 0<br>
+        • <span class="err">Nếu fail tiếp</span> → consecutive_failure_count tăng → health Degraded
+      </div>
+    </div>
+
+    <div class="callout danger"><b>Rủi ro:</b> Nếu Bootstrap fail liên tục (ví dụ: MSSQL connection down), <code>consecutive_failure_count</code> tăng mãi. Cần alert qua health endpoint. Không có giới hạn trên cho số lần retry — engine sẽ retry mãi mỗi phút.</div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">IV. Server Crash Mid-Sync + ERP Data Change During Downtime</h2>
+  <!-- ================================================================ -->
+
+  <div class="callout key" style="margin-bottom:24px">
+    <b>Vấn đề:</b> Nếu sync job đang chạy giữa chừng thì server die, sau đó ERP có thay đổi data. Lúc server chạy lại, làm sao lấy được data trong khoảng downtime đó?<br><br>
+    <b>Câu trả lời:</b> Không cần cơ chế đặc biệt. CT engine tự động xử lý nhờ <b>(1)</b> PG transaction atomic (checkpoint + data trong 1 tx), <b>(2)</b> Change Tracking accumulation, <b>(3)</b> Upsert idempotent.
+  </div>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge good">Atomic</span>
+      <h3 style="margin:0">Cốt lõi: Checkpoint + data trong cùng 1 PG transaction</h3>
+    </div>
+    <p class="note" style="margin-top:6px"><code>PostgresPartnersWriter.ApplyBatchAsync()</code> — checkpoint advance và data writes là 1 atomic unit</p>
+
+    <pre><span class="c">-- PostgresPartnersWriter.cs dòng 45-132</span>
+<span class="k">BEGIN TX</span>
+  ├─ UPDATE report.partners SET is_active = false  <span class="c">-- xóa/deactivate</span>
+  ├─ INSERT INTO report.partners (...) VALUES (...)
+  │     <span class="k">ON CONFLICT</span> (partner_id) <span class="k">DO UPDATE</span> SET ...  <span class="c">-- upsert</span>
+  └─ <span class="k">UPDATE</span> sync_meta.checkpoint
+        <span class="k">SET</span> last_sync_version = @upperWatermark
+        <span class="k">WHERE</span> source_table = @sourceTable
+          <span class="k">AND</span> last_sync_version = @previousCheckpoint
+<span class="k">COMMIT</span></pre>
+
+    <p>Hệ quả: checkpoint chỉ advance sau khi data đã ghi thành công. Nếu crash giữa chừng, toàn bộ transaction rollback — checkpoint giữ nguyên.</p>
+
+    <div class="callout key" style="margin-top:10px"><b>Idempotent writes:</b> <code>ON CONFLICT (partner_id) DO UPDATE</code> đảm bảo apply cùng 1 batch nhiều lần không gây duplicate hay corrupt data.</div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge good">Scenario A</span>
+      <h3 style="margin:0">Server die TRƯỚC khi PG transaction commit</h3>
+    </div>
+    <p class="note" style="margin-top:6px">Ví dụ: đang upsert rows được 50% thì server tắt</p>
+
+    <div class="flow-box">
+      <span class="step">Timeline:</span><br>
+      <div style="padding-left:16px;margin-top:4px">
+        1. CT reader đọc batch từ MSSQL (versions 11→20)<br>
+        2. PG writer bắt đầu upsert → crash<br>
+        <span class="err">└── PG transaction rollback (do connection die)</span><br>
+        3. Checkpoint KHÔNG đổi — vẫn là version 10<br>
+        <br>
+        <span class="good">Server restart → next sync cycle:</span><br>
+        4. Đọc checkpoint — last_sync_version = 10<br>
+        5. CT reader query: <span class="step">CHANGETABLE(CHANGES ..., 10)</span><br>
+        6. CT trả về tất cả changes từ 10→current (gồm cả batch failed + changes mới từ ERP)<br>
+        7. PG writer upsert lại — <span class="good">idempotent, không sao</span><br>
+        8. Advance checkpoint lên version mới ✓
+      </div>
+    </div>
+
+    <div class="callout"><b>Kết luận:</b> Không mất data. Checkpoint không đổi = engine re-process từ checkpoint cũ. Upsert làm phần còn lại.</div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge good">Scenario B</span>
+      <h3 style="margin:0">Server die SAU KHI PG transaction commit</h3>
+    </div>
+    <p class="note" style="margin-top:6px">Ví dụ: PG commit xong, server tắt trước khi log được ghi hoặc process exit</p>
+
+    <div class="flow-box">
+      <span class="step">Timeline:</span><br>
+      <div style="padding-left:16px;margin-top:4px">
+        1. CT reader đọc batch (versions 11→20)<br>
+        2. PG writer upsert + commit + advance checkpoint → <span class="good">OK</span><br>
+        3. Server crash sau commit<br>
+        <br>
+        <span class="good">Server restart → next sync cycle:</span><br>
+        4. Đọc checkpoint — last_sync_version = 20 (đã advance)<br>
+        5. CT reader query: <span class="step">CHANGETABLE(CHANGES ..., 20)</span><br>
+        6. Chỉ lấy changes từ 20→current — bỏ qua batch cũ ✓
+      </div>
+    </div>
+
+    <div class="callout"><b>Kết luận:</b> Checkpoint đã advance, data đã ghi. Engine tiếp tục từ checkpoint mới. Không duplicate.</div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge sql">Scenario C</span>
+      <h3 style="margin:0">ERP thay đổi data trong thời gian server downtime</h3>
+    </div>
+    <p class="note" style="margin-top:6px">Đây là câu hỏi chính: trong lúc sync server down, ERP insert/update/delete — khi server chạy lại, làm sao lấy được các thay đổi đó?</p>
+
+    <div class="flow-box">
+      <span class="step">Timeline với CT version:</span><br>
+      <div style="padding-left:16px;margin-top:4px">
+        10  ─ checkpoint (last_sync_version = 10)<br>
+        11  ─ ERP update Partner A<br>
+        12  ─ ERP insert Partner B<br>
+        13  ─ ERP delete Partner C    <span class="dim">← server đang down</span><br>
+        14  ─ ERP update Partner D<br>
+        ...<br>
+        25  ─ CHANGE_TRACKING_CURRENT_VERSION() = 25  <span class="dim">← server restart</span><br>
+        <br>
+        Query thực tế (SqlServerPartnersReader.cs dòng 133-160):<br>
+        <span class="k">SELECT</span> ... <span class="k">FROM</span> <span class="step">CHANGETABLE(CHANGES [CRM.Partners], 10)</span> <span class="k">AS</span> CT<br>
+        <span class="k">LEFT JOIN</span> [CRM.Partners] <span class="k">AS</span> P ON P.PartnerId = CT.PartnerId<br>
+        <span class="k">WHERE</span> CT.SYS_CHANGE_VERSION &lt;= 25<br>
+        <span class="k">ORDER BY</span> CT.SYS_CHANGE_VERSION, CT.PartnerId<br>
+        <br>
+        → Trả về tất cả rows với version 11→25<br>
+        → <span class="good">Bao gồm: update A, insert B, delete C, update D</span><br>
+        → <span class="good">Không thiếu thay đổi nào</span>
+      </div>
+    </div>
+
+    <div class="callout key" style="margin-top:10px"><b>Cơ chế:</b> Change Tracking lưu lịch sử thay đổi độc lập với sync server. Dù sync server có down bao lâu, CT vẫn tiếp tục ghi nhận changes. Khi sync chạy lại, nó chỉ cần query từ checkpoint cũ — CT trả về tất cả pending changes, bao gồm cả những change phát sinh trong thời gian downtime.</div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="badge danger">Scenario D</span>
+      <h3 style="margin:0">Rủi ro duy nhất: CT retention hết hạn</h3>
+    </div>
+    <p class="note" style="margin-top:6px">Mặc định retention = 2 ngày. Nếu downtime &gt; 2 ngày, CT cleanup old changes → checkpoint trở nên invalid. <b>Đã được xử lý tại Scenario 2 ở trên.</b></p>
+
+    <div class="flow-box">
+      <span class="step">Khi checkpoint &lt; MIN_VALID_VERSION:</span><br>
+      <div style="padding-left:16px;margin-top:4px">
+        1. <span class="step">SqlServerPartnersReader</span> throw <span class="err">CheckpointInvalidException</span><br>
+        2. <span class="step">ChangeTrackingSyncService</span> bắt exception<br>
+        3. <span class="step">checkpointStore.TransitionToFullResyncAsync()</span><br>
+        4. <span class="step">bootstrapService.ExecuteWithProvidedLockAsync()</span> → full snapshot<br>
+        5. Checkpoint mới = current CT version, status = ready<br>
+        <br>
+        <span class="good">→ Tự động phục hồi, không mất data</span>
+      </div>
+    </div>
+
+    <h4>Tổng kết tất cả kịch bản:</h4>
+    <table>
+      <tr><th>Kịch bản</th><th>Cơ chế</th><th>Mất data?</th></tr>
+      <tr>
+        <td>Crash trước PG commit</td><td>Checkpoint không đổi + upsert idempotent</td><td><span class="good">Không</span></td>
+      </tr>
+      <tr>
+        <td>Crash sau PG commit</td><td>Checkpoint đã advance, next run từ checkpoint mới</td><td><span class="good">Không</span></td>
+      </tr>
+      <tr>
+        <td>ERP change trong downtime</td><td>CT accumulation: query từ checkpoint cũ trả về tất cả</td><td><span class="good">Không</span></td>
+      </tr>
+      <tr>
+        <td>CT retention expired</td><td>CheckpointInvalid → bootstrap full resync</td><td><span class="good">Không</span></td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">V. State Machine — Chi tiết</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <pre>
+<span class="dim">┌────────────────────────────────────────────────────────────────────────────┐</span>
+<span class="dim">│                         CHECKPOINT STATE MACHINE                           │</span>
+<span class="dim">├────────────────────────────────────────────────────────────────────────────┤</span>
+<span class="dim">│</span>
+    <span class="c">── seed: INSERT INTO checkpoint (source_table, sync_status)</span>
+    <span class="c">         VALUES ('CRM.Partners', 'pending_initial_sync')</span>
+
+    <span class="state pending" style="display:inline-block;padding:4px 12px;min-width:auto;">pending_initial_sync</span>
+         │
+         │  <span class="good">Bootstrap thành công</span>
+         │  PostgresPartnersWriter.ApplyBootstrapAsync():
+         │    UPDATE checkpoint SET
+         │      last_sync_version = @baseline,      <span class="c">-- CT version đầu tiên</span>
+         │      sync_status = 'ready',
+         │      last_success_at = NOW(),
+         │      consecutive_failure_count = 0
+         ▼
+    <span class="state ready" style="display:inline-block;padding:4px 12px;min-width:auto;">ready</span>
+         │
+         ├── <span class="good">CT sync thành công</span>
+         │   AdvanceAsync(): UPDATE SET version++, last_success_at, failure=0
+         │
+         ├── <span class="warn">CT gặp lỗi (timeout, transient)</span>
+         │   → trả về Failed outcome
+         │   → checkpoint KHÔNG đổi
+         │   → cycle sau CT lại (vì status vẫn 'ready')
+         │
+         ├── <span class="err">CT apply retry hết 3 lần</span>
+         │   → trả về Failed (ApplyRetriesExhausted)
+         │   → checkpoint KHÔNG đổi
+         │
+         ├── <span class="warn">CT apply optimistic conflict</span>
+         │   → outcome = RequiresFullResync
+         │   → TransitionToFullResyncAsync(): set status = 'requires_full_resync'
+         │
+         ├── <span class="danger">CT invalid exception</span>
+         │   → TransitionToFullResyncAsync()
+         │   → bootstrapService.ExecuteWithProvidedLockAsync()  <span class="c">-- immediate recovery</span>
+         │   → nếu OK: checkpoint = ready
+         │
+         └── <span class="danger">Bootstrap fail</span> (từ recovery path)
+             → TransitionToFullResyncAsync() (failure_count++)
+             → cycle sau retry
+
+    <span class="state error" style="display:inline-block;padding:4px 12px;min-width:auto;">requires_full_resync</span>
+         │
+         │  <span class="good">Bootstrap thành công</span> (từ SyncOrchestrator)
+         │  → quay về <span class="state ready" style="display:inline-block;padding:2px 8px;min-width:auto;font-size:11px;">ready</span>
+         │
+         │  <span class="err">Bootstrap thất bại</span>
+         │  → giữ nguyên requires_full_resync
+         │  → consecutive_failure_count++
+         │  → cycle sau retry
+         │
+         ▼
+    (loop đến khi thành công hoặc alert can thiệp)
+<span class="dim">└────────────────────────────────────────────────────────────────────────────┘</span></pre>
+
+    <div class="callout key"><b>Nguyên tắc:</b> Checkpoint chỉ giữ trạng thái error khi có lỗi thực sự. Lỗi transient (timeout, connection loss) KHÔNG làm thay đổi checkpoint — CT vẫn giữ 'ready' và retry ở cycle sau. Chỉ lỗi nghiêm trọng (CheckpointInvalid, ConcurrentCheckpoint, BootstrapFailed) mới transition sang requires_full_resync.</div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">VI. Health Implications</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <p>Health endpoint (<code>GET /api/central-db-sync/health/{sourceTable}</code>) dùng checkpoint để quyết định trạng thái:</p>
+
+    <table>
+      <tr><th>Điều kiện</th><th>Health Status</th><th>Giải thích</th></tr>
+      <tr>
+        <td>checkpoint == null</td>
+        <td><span class="badge warn">Unknown</span></td>
+        <td>Table chưa được seed hoặc không tồn tại</td>
+      </tr>
+      <tr>
+        <td><code>sync_status = 'pending_initial_sync'</code></td>
+        <td><span class="badge warn">Unknown</span></td>
+        <td>Chưa có sync nào — đang chờ bootstrap lần đầu</td>
+      </tr>
+      <tr>
+        <td><code>sync_status = 'requires_full_resync'</code></td>
+        <td><span class="badge danger">Degraded</span></td>
+        <td>Checkpoint lỗi — cần bootstrap lại. HTTP vẫn 200 (system online) nhưng status = 1</td>
+      </tr>
+      <tr>
+        <td><code>consecutive_failure_count &gt; 0</code><br>(dù status = 'ready')</td>
+        <td><span class="badge danger">Degraded</span></td>
+        <td>Có lỗi gần đây — thường tự hồi phục. Kiểm tra sync_run_log để trace</td>
+      </tr>
+      <tr>
+        <td><code>now - last_success_at &gt; maxAllowedLag</code></td>
+        <td><span class="badge danger">Degraded</span></td>
+        <td>Sync không chạy hoặc bị trễ — có thể Hangfire job đã dừng</td>
+      </tr>
+      <tr>
+        <td>Tất cả điều kiện trên đều pass</td>
+        <td><span class="badge good">Healthy</span></td>
+        <td>Sync hoạt động bình thường</td>
+      </tr>
+    </table>
+
+    <div class="callout"><b>Quan trọng:</b> Degraded ≠ system down. Engine vẫn chạy, vẫn retry. Degraded chỉ báo rằng có điều bất thường cần xem xét. Unknown là trạng thái mong đợi sau seed — không phải lỗi.</div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">VII. Lock &amp; Transaction — Race Condition Analysis</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <table>
+      <tr><th>Kịch bản</th><th>Phòng chống</th><th>Kết quả</th></tr>
+      <tr>
+        <td>2 workers bootstrap cùng lúc</td>
+        <td>Advisory lock (pg_try_advisory_lock)</td>
+        <td>Worker 2: <code>skipped_locked</code></td>
+      </tr>
+      <tr>
+        <td>1 bootstrap + 1 CT cùng lúc</td>
+        <td>Advisory lock (cùng key hash)</td>
+        <td>Worker 2: <code>skipped_locked</code></td>
+      </tr>
+      <tr>
+        <td>CT gặp CheckpointInvalid → release lock → acquire lại</td>
+        <td><b>ExecuteWithProvidedLockAsync</b> — giữ lock xuyên suốt</td>
+        <td>Không conflict — lock ownership giữ nguyên</td>
+      </tr>
+      <tr>
+        <td>Bootstrap CT version drift (concurrent DML trên MSSQL)</td>
+        <td>READPAST + verify-before-commit (compare CT version trước/sau)</td>
+        <td>Rollback + retry (tối đa 3 lần) → ổn định</td>
+      </tr>
+      <tr>
+        <td>PostgreSQL apply optimistic conflict (2 workers, lock failure)</td>
+        <td><code>WHERE last_sync_version = @previous</code> guard</td>
+        <td>affected == 0 → rollback → RequiresFullResync</td>
+      </tr>
+    </table>
+
+    <div class="callout key"><b>Kết luận:</b> Không có race condition nào dẫn đến data corruption. Trường hợp tệ nhất là sync bị skip 1 cycle (<code>skipped_locked</code>) hoặc cần resync (<code>requires_full_resync</code>). Cả 2 đều tự phục hồi ở cycle sau.</div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2 class="section">VIII. Source Map — ai chịu trách nhiệm cho checkpoint?</h2>
+  <!-- ================================================================ -->
+
+  <div class="card">
+    <ul class="files-list">
+      <li><code>Infrastructure/CentralDbSync/PostgresSyncCheckpointStore.cs</code> — read, advance, transition</li>
+      <li><code>Infrastructure/CentralDbSync/PostgresPartnersWriter.cs</code> — bootstrap + CT apply: update checkpoint trong cùng transaction với data</li>
+      <li><code>Application/CentralDbSync/Services/SyncOrchestrator.cs</code> — quyết định bootstrap hay CT dựa trên checkpoint status</li>
+      <li><code>Application/CentralDbSync/Services/ChangeTrackingSyncService.cs</code> — CT flow: validate checkpoint, catch CheckpointInvalidException, gọi immediate recovery</li>
+      <li><code>Application/CentralDbSync/Services/BootstrapSyncService.cs</code> — bootstrap flow + ExecuteWithProvidedLockAsync cho same-lock recovery</li>
+      <li><code>Infrastructure/CentralDbSync/SqlServerPartnersReader.cs</code> — ReadBatchAsync: throw CheckpointInvalidException khi MIN_VALID_VERSION &gt; checkpoint</li>
+      <li><code>Infrastructure/CentralDbSync/CentralDbSyncHealthService.cs</code> — health check dựa trên checkpoint data</li>
+      <li><code>Infrastructure/Database/SqlScript/CentralDbSync/002-central-db-sync-seed.sql</code> — seed: pending_initial_sync</li>
+    </ul>
+  </div>
+
+  <footer class="page">
+    <b>Central DB Sync — Phase 1 Pilot · Checkpoint &amp; Recovery Analysis</b><br>
+    Covers: 4 checkpoint failure scenarios · server crash mid-sync · ERP change during downtime · state machine · same-lock recovery · health implications · race condition analysis<br>
+    <span style="font-size:12px">Last updated: 2026-07-20</span>
+  </footer>
+</div>
+</body>
+</html>
