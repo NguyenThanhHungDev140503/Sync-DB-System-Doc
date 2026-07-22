@@ -28,6 +28,7 @@ Sync-DB-System-Doc/
 | File | Mô tả |
 |------|-------|
 | [`03_ref_schema.sql`](./03_ref_schema.sql) | PostgreSQL `ref` schema: reference & rate-card tables (section 5.2) + controlled vocabularies (section 5.3). Thiết kế không FK giữa các bảng, PK khớp ERP PK để upsert idempotent. |
+| [`001-central-db-sync-schema.sql`](../../Infrastructure/Database/SqlScript/CentralDbSync/001-central-db-sync-schema.sql) | Sync engine schema: `sync_meta` namespace (checkpoint, bootstrap_request, table_sync_config, run_log) + `report.*` tables — `report.units`, `report.sizes` (denormalised copies synced from ERP). |
 
 ---
 
@@ -97,6 +98,9 @@ Giải thích sâu từng thành phần kiến trúc. Đọc theo thứ tự flo
 | 5 | [`notes/2026-07-21-sync-orchestrator-dependency-explained.md`](./central-database-blueprint/notes/2026-07-21-sync-orchestrator-dependency-explained.md) | **SyncOrchestrator**: dependency handling, 7 error scenarios, retry cycle |
 | 6 | [`notes/2026-07-21-enqueue-watchdog-explained.md`](./central-database-blueprint/notes/2026-07-21-enqueue-watchdog-explained.md) | **Watchdog**: cơ chế one-shot watchdog 45s để recover orphan request khi crash |
 | 7 | [`notes/2026-07-21-cross-storage-race-design-explained.md`](./central-database-blueprint/notes/2026-07-21-cross-storage-race-design-explained.md) | **Cross-storage Race**: optimistic lock giữa PostgreSQL và Hangfire (SQL Server) |
+| 8 | [`notes/2026-07-21-ct-checkpoint-invalid-recovery-explained.md`](./central-database-blueprint/notes/2026-07-21-ct-checkpoint-invalid-recovery-explained.md) | **CT Checkpoint Invalid Recovery**: checkpoint quá cũ → auto transition `requires_full_resync` → bootstrap recovery giữ lock, plus SyncOrchestrator retry path B |
+| 9 | [`notes/2026-07-21-sync-hang-recovery-deep-dive.md`](./central-database-blueprint/notes/2026-07-21-sync-hang-recovery-deep-dive.md) | **Sync Hang Recovery Deep Dive**: trace khi process treo — `skipped_locked` vs `skipped_dependency`, lock lifecycle, checkpoint state machine, auto-recovery paths |
+| 10 | [`notes/2026-07-22-advisory-lock-timeout-fix-explained.md`](./central-database-blueprint/notes/2026-07-22-advisory-lock-timeout-fix-explained.md) | **Advisory Lock Timeout Fix**: Defense in depth — Layer 1 (CancellationToken timeout 5ph/10ph) + Layer 3 (watchdog force-release với Interlocked guard) |
 
 ---
 
@@ -141,7 +145,7 @@ File trong `central-database-blueprint/artifacts/`:
 
 **Người mới onboarding:**
 1. `phase-1/specs/2026-07-18-central-db-sync-design.md` — nắm kiến trúc tổng quan
-2. Notes explainers (#1 → #7) — hiểu từng thành phần
+2. Notes explainers (#1 → #10) — hiểu từng thành phần
 3. `phase-1/review/2026-07-18-Synchronization-Consistency-Review.md` — biết các điểm cần lưu ý
 
 **Dev cần implement tính năng mới:**
@@ -159,4 +163,4 @@ File trong `central-database-blueprint/artifacts/`:
 
 ---
 
-*Last updated: 2026-07-21*
+*Last updated: 2026-07-22*
