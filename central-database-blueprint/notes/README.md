@@ -13,13 +13,44 @@ notes/
 ├── 2026-07-19-*.md                    (3 files — ngày 19/07)
 ├── 2026-07-20-*.md                    (2 files — ngày 20/07)
 ├── 2026-07-21-*.md                    (11 files — ngày 21/07)
+├── 2026-07-22-*.md                    (1 file — ngày 22/07)
+├── 2026-07-23-*.md                    (1 file — ngày 23/07)
 ├── Future Implement/                  (trống — chưa có nội dung)
+├── technical/
+│   ├── (10 files ngày 21/07)
+│   ├── (2 files ngày 23/07)
+│   └── README.md
 └── Issues Error/
     ├── 2026-07-21-advisory-lock-no-timeout-forever-lock.md
     └── 2026-07-21-checkpoint-unknown-state-infinite-loop.md
 ```
 
 ---
+
+### Ngày 22/07 — Lock Security
+
+| File | Mô tả | Loại |
+|------|-------|------|
+| `2026-07-22-advisory-lock-timeout-fix-explained.md` | **Advisory Lock Timeout Fix**: Defense in depth — Layer 1 (CancellationToken timeout 5ph/10ph) + Layer 3 (watchdog force-release với Interlocked guard). Giải thích tại sao advisory lock dễ bị forever-lock và cách fix. | Architecture Explained |
+
+### Ngày 23/07 — Flow Overview & Metadata
+
+| File | Mô tả | Loại |
+|------|-------|------|
+| `2026-07-23-central-db-sync-all-flows-explained.md` | **All Flows**: giải thích toàn bộ 9 flow trong hệ thống — scheduled sync, bootstrap, CT sync, manual bootstrap request, checkpoint recovery, advisory lock, mapping, orphan cleanup, watchdog. Phù hợp cho người mới onboarding kèm callgraph + flowchart. | Architecture Explained |
+| `technical/2026-07-23-bootstrap-full-flow-explained.md` | **Bootstrap Full Flow**: trace end-to-end từ API → SubmitAsync → Hangfire job → lock → reader → applier → orphan cleanup → checkpoint → audit log. | Architecture Explained |
+| `technical/2026-07-23-metadata-fields-explained.md` | **Metadata Fields** (`source_system` + `synced_at`): tem nguồn dữ liệu, dấu thời gian sync cuối, engine tự động thêm vào mọi UPSERT. | Architecture Explained |
+
+#### Schema Cleanup 23/07
+
+Các thay đổi về schema trong commit `9fc405e`:
+- Tất cả DEFAULT bị xóa khỏi `sync_meta.*` và `ref.customer`/`ref.supplier` — application phải cung cấp mọi giá trị explicit
+- `ref.customer`.`customer_id`: TEXT → INTEGER (không còn FORMAT prefix)
+- `ref.supplier`.`supplier_id`: TEXT → INTEGER (không còn FORMAT prefix)
+- `ref.customer`/`ref.supplier`: thêm `synced_at` + `source_system` columns
+- `PostgresSyncConfigStore.SeedAsync()`: **P1 fixed** — thêm `dependency` vào INSERT/UPDATE
+- `UpsertSqlBuilder`: tự động append `source_system` + `synced_at` vào mọi UPSERT
+- `PostgresGenericApplier`: tự động set `source_system = rule.OwnershipScope`
 
 ## Tổng quan các notes
 

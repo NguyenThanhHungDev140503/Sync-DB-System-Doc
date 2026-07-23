@@ -28,13 +28,13 @@ Sync-DB-System-Doc/
 | File | Mô tả |
 |------|-------|
 | [`03_ref_schema.sql`](./03_ref_schema.sql) | PostgreSQL `ref` schema: reference & rate-card tables (section 5.2) + controlled vocabularies (section 5.3). Thiết kế không FK giữa các bảng, PK khớp ERP PK để upsert idempotent. |
-| [`001-central-db-sync-schema.sql`](../../Infrastructure/Database/SqlScript/CentralDbSync/001-central-db-sync-schema.sql) | Sync engine schema: `sync_meta` namespace (checkpoint, bootstrap_request, table_sync_config, run_log) + `report.*` tables — `report.units`, `report.sizes` (denormalised copies synced from ERP). |
+| [`001-central-db-sync-schema.sql`](../../Infrastructure/Database/SqlScript/CentralDbSync/001-central-db-sync-schema.sql) | Sync engine schema: `sync_meta` namespace + `report.*` tables (`report.partners`, `report.sizes`) + `ref.*` tables (`ref.customer`, `ref.supplier`, `ref.units`). Schema được refactor từ `report` → `ref` cho reference tables, và CRM.Partners được tách thành 3 rules. **Update 23/07**: tất cả DEFAULT values bị xóa khỏi schema — application phải cung cấp mọi giá trị explicit. `ref.customer`/`ref.supplier` PK đổi từ TEXT → INTEGER, thêm cột `synced_at` + `source_system`. |
 
 ---
 
 ## 2. Phase 1 — Specs & Plans
 
-Tài liệu nền tảng: thiết kế, triển khai, và review cho Phase 1 pilot (CRM.Partners).
+Tài liệu nền tảng: thiết kế, triển khai, và review cho Phase 1 pilot (CRM.Partners split thành 3 mapping rules: `CRM.Partners to Report` → `report.partners`, `CRM.Partners to customer` → `ref.customer`, `CRM.Partners to supplier` → `ref.supplier`).
 
 ### 2.1. Specs (Yêu cầu & Thiết kế)
 
@@ -101,6 +101,9 @@ Giải thích sâu từng thành phần kiến trúc. Đọc theo thứ tự flo
 | 8 | [`notes/2026-07-21-ct-checkpoint-invalid-recovery-explained.md`](./central-database-blueprint/notes/2026-07-21-ct-checkpoint-invalid-recovery-explained.md) | **CT Checkpoint Invalid Recovery**: checkpoint quá cũ → auto transition `requires_full_resync` → bootstrap recovery giữ lock, plus SyncOrchestrator retry path B |
 | 9 | [`notes/2026-07-21-sync-hang-recovery-deep-dive.md`](./central-database-blueprint/notes/2026-07-21-sync-hang-recovery-deep-dive.md) | **Sync Hang Recovery Deep Dive**: trace khi process treo — `skipped_locked` vs `skipped_dependency`, lock lifecycle, checkpoint state machine, auto-recovery paths |
 | 10 | [`notes/2026-07-22-advisory-lock-timeout-fix-explained.md`](./central-database-blueprint/notes/2026-07-22-advisory-lock-timeout-fix-explained.md) | **Advisory Lock Timeout Fix**: Defense in depth — Layer 1 (CancellationToken timeout 5ph/10ph) + Layer 3 (watchdog force-release với Interlocked guard) |
+| 11 | [`notes/2026-07-23-central-db-sync-all-flows-explained.md`](./central-database-blueprint/notes/2026-07-23-central-db-sync-all-flows-explained.md) | **All Flows Overview**: giải thích toàn bộ 9 flow trong hệ thống (scheduled sync, bootstrap, CT sync, manual bootstrap request, checkpoint recovery, advisory lock, mapping & column transform, orphan cleanup, watchdog). Phù hợp cho người mới onboarding. |
+| 12 | [`notes/technical/2026-07-23-bootstrap-full-flow-explained.md`](./central-database-blueprint/notes/technical/2026-07-23-bootstrap-full-flow-explained.md) | **Bootstrap Full Flow**: end-to-end từ API TriggerBootstrap → SubmitAsync → Hangfire Job → ExecuteCoreAsync → Reader → Applier → Orphan Cleanup → Checkpoint → Audit Log. |
+| 13 | [`notes/technical/2026-07-23-metadata-fields-explained.md`](./central-database-blueprint/notes/technical/2026-07-23-metadata-fields-explained.md) | **Metadata Fields** (`source_system` + `synced_at`): tem nguồn dữ liệu và dấu thời gian sync cuối. Engine tự động thêm vào mọi UPSERT mà không cần khai báo mapping rule. |
 
 ---
 
@@ -122,7 +125,7 @@ Các quyết định thiết kế và hướng dẫn vận hành:
 
 | File | Mô tả |
 |------|-------|
-| [`notes/2026-07-21-dependency-config-inconsistency-audit.md`](./central-database-blueprint/notes/2026-07-21-dependency-config-inconsistency-audit.md) | **Audit**: 4 vấn đề phát hiện — P0 (validator không check dependency name), P1 (SeedAsync thiếu cột dependency), P2 (DB column dead data), P3 (dual source of truth). Chưa implement. |
+| [`notes/Issues Error/2026-07-21-dependency-config-inconsistency-audit.md`](./central-database-blueprint/notes/Issues%20Error/2026-07-21-dependency-config-inconsistency-audit.md) | **Audit**: 4 vấn đề phát hiện — P0 (validator không check dependency name), P1 (SeedAsync thiếu cột dependency), P2 (DB column dead data), P3 (dual source of truth). **Update 23/07**: P1 đã fix trong commit `9fc405e` — `PostgresSyncConfigStore.SeedAsync()` thêm cột `dependency` vào INSERT/UPDATE. |
 
 ---
 
@@ -145,7 +148,7 @@ File trong `central-database-blueprint/artifacts/`:
 
 **Người mới onboarding:**
 1. `phase-1/specs/2026-07-18-central-db-sync-design.md` — nắm kiến trúc tổng quan
-2. Notes explainers (#1 → #10) — hiểu từng thành phần
+2. Notes explainers (#1 → #13) — hiểu từng thành phần
 3. `phase-1/review/2026-07-18-Synchronization-Consistency-Review.md` — biết các điểm cần lưu ý
 
 **Dev cần implement tính năng mới:**
@@ -163,4 +166,4 @@ File trong `central-database-blueprint/artifacts/`:
 
 ---
 
-*Last updated: 2026-07-22*
+*Last updated: 2026-07-23*
